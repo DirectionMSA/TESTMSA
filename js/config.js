@@ -1,3 +1,5 @@
-// Après création de votre projet Supabase, remplacez ces deux valeurs.
-export const SUPABASE_URL = "https://VOTRE-PROJET.supabase.co";
-export const SUPABASE_ANON_KEY = "VOTRE_CLE_ANON_PUBLIQUE";
+export const SUPABASE_URL =
+    "https://bkecigsvcspeanoduseh.supabase.co";
+
+export const SUPABASE_ANON_KEY =
+    "sb_publishable_IuRzLmBlFuQwlO3nq6XlGg_D9RYIPsg";
