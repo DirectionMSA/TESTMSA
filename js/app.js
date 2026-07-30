@@ -1,272 +1,453 @@
+```javascript
 import { supabase } from "./supabase.js";
-
-const user = JSON.parse(
-sessionStorage.getItem("msa_user") || "null"
-);
-
-if (!user) {
-location.href = "login.html";
-throw new Error("Not authenticated");
-}
-
-const content = document.querySelector("#content");
-const title = document.querySelector("#pageTitle");
-const welcome = document.querySelector("#welcomeText");
-
-// ============================================================
-// OUTILS
-// ============================================================
-
-function esc(value) {
-return String(value ?? "").replace(
-/[&<>"']/g,
-char => ({
-"&": "&",
-"<": "<",
-">": ">",
-'"': """,
-"'": "'"
-})[char]
-);
-}
 
 // ============================================================
 // UTILISATEUR CONNECTÉ
 // ============================================================
 
-let currentRoles = [];
+const user = JSON.parse(
+    sessionStorage.getItem("msa_user") || "null"
+);
 
-async function loadCurrentUserRoles() {
-
-```
-const { data, error } = await supabase
-    .from("user_roles")
-    .select(`
-        role_id,
-        roles (
-            id,
-            name,
-            description,
-            icon,
-            is_admin
-        )
-    `)
-    .eq("user_id", user.id);
-
-if (error) {
-    console.error(
-        "Erreur chargement des rôles :",
-        error
-    );
-
-    currentRoles = [];
-    return;
+if (!user) {
+    window.location.href = "login.html";
+    throw new Error("Utilisateur non connecté.");
 }
 
-currentRoles = (data || [])
-    .map(item => item.roles)
-    .filter(Boolean);
-```
-
-}
 
 // ============================================================
-// ADMIN
+// ELEMENTS PRINCIPAUX
+// ============================================================
+
+const content = document.querySelector("#content");
+const title = document.querySelector("#pageTitle");
+const welcome = document.querySelector("#welcomeText");
+const userMini = document.querySelector("#userMini");
+const modalRoot = document.querySelector("#modalRoot");
+
+
+// ============================================================
+// VARIABLES GLOBALES
+// ============================================================
+
+let currentUser = null;
+let currentRoles = [];
+let currentPermissions = [];
+
+
+// ============================================================
+// ECHAPPEMENT HTML
+// ============================================================
+
+function esc(value) {
+
+    return String(value ?? "")
+        .replace(/[&<>"']/g, char => ({
+            "&": "&amp;",
+            "<": "&lt;",
+            ">": "&gt;",
+            '"': "&quot;",
+            "'": "&#039;"
+        }[char]));
+
+}
+
+
+// ============================================================
+// CHARGER LE PROFIL ET LES ROLES
+// ============================================================
+
+async function loadCurrentUser() {
+
+    const {
+        data: profile,
+        error: profileError
+    } = await supabase
+        .from("profiles")
+        .select("*")
+        .eq("id", user.id)
+        .single();
+
+
+    if (profileError || !profile) {
+
+        console.error(
+            "Impossible de charger le profil :",
+            profileError
+        );
+
+        sessionStorage.removeItem("msa_user");
+
+        window.location.href = "login.html";
+
+        return;
+
+    }
+
+
+    currentUser = profile;
+
+
+    const {
+        data: roleRows,
+        error: roleError
+    } = await supabase
+        .from("user_roles")
+        .select(`
+            role_id,
+            roles (
+                id,
+                name,
+                description,
+                icon,
+                is_admin
+            )
+        `)
+        .eq("user_id", user.id);
+
+
+    if (roleError) {
+
+        console.error(
+            "Erreur chargement rôles :",
+            roleError
+        );
+
+        currentRoles = [];
+
+    } else {
+
+        currentRoles = (roleRows || [])
+            .map(row => row.roles)
+            .filter(Boolean);
+
+    }
+
+
+    await loadCurrentPermissions();
+
+    renderUserIdentity();
+
+    applyNavigationPermissions();
+
+}
+
+
+// ============================================================
+// CHARGER LES PERMISSIONS
+// ============================================================
+
+async function loadCurrentPermissions() {
+
+    currentPermissions = [];
+
+
+    if (isAdmin()) {
+
+        currentPermissions = [
+            "view",
+            "add",
+            "edit",
+            "edit_own",
+            "delete",
+            "delete_own"
+        ];
+
+        return;
+
+    }
+
+
+    if (!currentRoles.length) {
+        return;
+    }
+
+
+    const roleIds = currentRoles.map(
+        role => role.id
+    );
+
+
+    const {
+        data,
+        error
+    } = await supabase
+        .from("role_permissions")
+        .select(`
+            module,
+            permission_id,
+            permissions (
+                name
+            )
+        `)
+        .in("role_id", roleIds);
+
+
+    if (error) {
+
+        console.error(
+            "Erreur chargement permissions :",
+            error
+        );
+
+        return;
+
+    }
+
+
+    currentPermissions = (data || [])
+        .map(row => ({
+            module: row.module,
+            permission: row.permissions?.name
+        }));
+
+}
+
+
+// ============================================================
+// VERIFIER SI ADMIN
 // ============================================================
 
 function isAdmin() {
 
-```
-return currentRoles.some(
-    role => role.is_admin === true
-);
-```
+    return currentRoles.some(
+        role => role.is_admin === true
+    );
 
 }
 
+
 // ============================================================
-// AFFICHAGE DU PROFIL
+// VERIFIER UNE PERMISSION
 // ============================================================
 
-function renderUserMini() {
+function hasPermission(
+    permission,
+    module
+) {
 
-```
-const userMini =
-    document.querySelector("#userMini");
+    if (isAdmin()) {
+        return true;
+    }
 
-if (!userMini) {
-    return;
+
+    return currentPermissions.some(
+        item =>
+            item.permission === permission &&
+            (
+                item.module === module ||
+                item.module === "*"
+            )
+    );
+
 }
 
-const roleBadges =
-    currentRoles.length
 
-        ? currentRoles
-            .map(role => {
+// ============================================================
+// IDENTITE UTILISATEUR
+// ============================================================
+
+function renderUserIdentity() {
+
+    if (!userMini) {
+        return;
+    }
+
+
+    const roleBadges = currentRoles
+        .map(role => {
+
+            if (role.is_admin) {
 
                 return `
-                    <span class="user-role">
-                        ${esc(role.icon || "")}
-                        ${esc(role.name)}
+                    <span class="role-badge admin-role">
+                        👑 Admin
                     </span>
                 `;
 
-            })
-            .join(" • ")
-
-        : `
-            <span class="user-role">
-                Utilisateur
-            </span>
-        `;
+            }
 
 
-userMini.innerHTML = `
+            return `
+                <span class="role-badge">
+                    ${esc(role.icon || "")}
+                    ${esc(role.name)}
+                </span>
+            `;
 
-    <div class="user-mini">
+        })
+        .join("");
 
-        <strong>
-            ${esc(user.display_name)}
-        </strong>
 
-        <div class="user-roles">
+    userMini.innerHTML = `
 
-            ${roleBadges}
+        <div class="user-mini">
+
+            <strong>
+                ${esc(
+                    currentUser.display_name
+                )}
+            </strong>
+
+            <div class="user-roles">
+
+                ${
+                    roleBadges ||
+                    `<span class="muted">
+                        Aucun rôle
+                    </span>`
+                }
+
+            </div>
 
         </div>
 
-    </div>
+    `;
 
-`;
-```
+
+    if (welcome) {
+
+        welcome.textContent =
+            `Bienvenue, ${currentUser.display_name}`;
+
+    }
 
 }
+
 
 // ============================================================
-// INITIALISATION UTILISATEUR
+// NAVIGATION SELON LES DROITS
 // ============================================================
 
-async function initializeUser() {
+function applyNavigationPermissions() {
 
-```
-await loadCurrentUserRoles();
+    const adminItems =
+        document.querySelectorAll(
+            ".admin-only"
+        );
 
-renderUserMini();
 
-if (welcome) {
+    if (isAdmin()) {
 
-    welcome.textContent =
-        `Bienvenue, ${user.display_name}`;
+        adminItems.forEach(
+            item => {
+                item.style.display = "";
+            }
+        );
 
-}
+        return;
 
-// Les sections d'administration
-// sont visibles uniquement pour les admins.
+    }
 
-if (!isAdmin()) {
 
-    document
-        .querySelectorAll(".admin-only")
-        .forEach(element => {
-
-            element.style.display = "none";
-
-        });
-
-}
-```
+    adminItems.forEach(
+        item => {
+            item.style.display = "none";
+        }
+    );
 
 }
+
 
 // ============================================================
-// DÉCONNEXION
+// DECONNEXION
 // ============================================================
 
 const logoutBtn =
-document.querySelector("#logoutBtn");
+    document.querySelector(
+        "#logoutBtn"
+    );
+
 
 if (logoutBtn) {
 
-```
-logoutBtn.onclick = async () => {
+    logoutBtn.onclick = async () => {
 
-    sessionStorage.removeItem(
-        "msa_user"
-    );
+        sessionStorage.removeItem(
+            "msa_user"
+        );
 
-    await supabase.auth.signOut();
+        try {
 
-    location.href =
-        "login.html";
+            await supabase.auth.signOut();
 
-};
-```
+        } catch (error) {
+
+            console.error(error);
+
+        }
+
+        window.location.href =
+            "login.html";
+
+    };
 
 }
+
 
 // ============================================================
 // MENU MOBILE
 // ============================================================
 
 const mobileMenu =
-document.querySelector("#mobileMenu");
+    document.querySelector(
+        "#mobileMenu"
+    );
+
 
 if (mobileMenu) {
 
-```
-mobileMenu.onclick = () => {
+    mobileMenu.onclick = () => {
 
-    document
-        .querySelector(".sidebar")
-        ?.classList.toggle("open");
+        document
+            .querySelector(".sidebar")
+            ?.classList.toggle("open");
 
-};
-```
+    };
 
 }
+
 
 // ============================================================
 // NAVIGATION
 // ============================================================
 
 document
-.querySelectorAll(".nav-item")
-.forEach(link => {
+    .querySelectorAll(".nav-item")
+    .forEach(item => {
 
-```
-    link.onclick = () => {
+        item.onclick = () => {
 
-        document
-            .querySelectorAll(".nav-item")
-            .forEach(item => {
-
-                item.classList.remove(
-                    "active"
+            document
+                .querySelectorAll(".nav-item")
+                .forEach(
+                    element =>
+                        element.classList.remove(
+                            "active"
+                        )
                 );
 
-            });
 
-
-        link.classList.add(
-            "active"
-        );
-
-
-        load(
-            link.dataset.page
-        );
-
-
-        document
-            .querySelector(".sidebar")
-            ?.classList.remove(
-                "open"
+            item.classList.add(
+                "active"
             );
 
-    };
 
-});
-```
+            load(
+                item.dataset.page
+            );
+
+
+            document
+                .querySelector(".sidebar")
+                ?.classList.remove(
+                    "open"
+                );
+
+        };
+
+    });
+
 
 // ============================================================
 // CHARGEMENT DES PAGES
@@ -274,638 +455,587 @@ document
 
 async function load(page) {
 
-```
-const pageLink =
-    document.querySelector(
-        `[data-page="${page}"]`
-    );
+    const pageElement =
+        document.querySelector(
+            `[data-page="${page}"]`
+        );
 
 
-title.textContent =
-    pageLink
-        ?.querySelector("span")
-        ?.textContent
-    || "Tableau de bord";
+    title.textContent =
+        pageElement
+            ?.querySelector("span")
+            ?.textContent ||
+        "Tableau de bord";
 
 
-if (page === "dashboard") {
+    if (page === "dashboard") {
 
-    return dashboard();
+        return dashboard();
 
-}
-
-
-if (page === "requests") {
-
-    return requests();
-
-}
+    }
 
 
-if (page === "users") {
+    if (page === "users") {
 
-    return users();
+        return users();
 
-}
-
-
-if (page === "permissions") {
-
-    return permissions();
-
-}
+    }
 
 
-if (page === "roles") {
+    if (page === "requests") {
 
-    return roles();
+        return requests();
 
-}
+    }
 
 
-return generic(page);
-```
+    if (page === "roles") {
+
+        return roles();
+
+    }
+
+
+    if (page === "permissions") {
+
+        return permissions();
+
+    }
+
+
+    return generic(page);
 
 }
+
 
 // ============================================================
-// TABLEAU DE BORD
+// DASHBOARD
 // ============================================================
 
 async function dashboard() {
 
-```
-const [
-    marriagesResult,
-    sanctionsResult,
-    blacklistResult,
-    documentsResult
-] = await Promise.all([
+    const [
+        marriages,
+        sanctions,
+        blacklist,
+        documents
+    ] = await Promise.all([
 
-    supabase
-        .from("mariages")
-        .select("*", {
-            count: "exact",
-            head: true
-        }),
+        supabase
+            .from("mariages")
+            .select("*", {
+                count: "exact",
+                head: true
+            }),
 
-    supabase
-        .from("sanctions")
-        .select("*", {
-            count: "exact",
-            head: true
-        }),
+        supabase
+            .from("sanctions")
+            .select("*", {
+                count: "exact",
+                head: true
+            }),
 
-    supabase
-        .from("blacklist")
-        .select("*", {
-            count: "exact",
-            head: true
-        })
-        .eq(
-            "active",
-            true
-        ),
+        supabase
+            .from("blacklist")
+            .select("*", {
+                count: "exact",
+                head: true
+            })
+            .eq(
+                "active",
+                true
+            ),
 
-    supabase
-        .from("documents")
-        .select("*", {
-            count: "exact",
-            head: true
-        })
+        supabase
+            .from("documents")
+            .select("*", {
+                count: "exact",
+                head: true
+            })
 
-]);
-
-
-content.innerHTML = `
-
-    <div class="cards">
-
-        <div class="stat-card">
-            <small>Mariages</small>
-            <strong>
-                ${marriagesResult.count ?? 0}
-            </strong>
-        </div>
+    ]);
 
 
-        <div class="stat-card">
-            <small>Sanctions</small>
-            <strong>
-                ${sanctionsResult.count ?? 0}
-            </strong>
-        </div>
+    content.innerHTML = `
 
+        <div class="cards">
 
-        <div class="stat-card">
-            <small>Blacklist actives</small>
-            <strong>
-                ${blacklistResult.count ?? 0}
-            </strong>
-        </div>
+            <div class="stat-card">
+                <small>Mariages</small>
+                <strong>
+                    ${marriages.count ?? 0}
+                </strong>
+            </div>
 
+            <div class="stat-card">
+                <small>Sanctions</small>
+                <strong>
+                    ${sanctions.count ?? 0}
+                </strong>
+            </div>
 
-        <div class="stat-card">
-            <small>Documents</small>
-            <strong>
-                ${documentsResult.count ?? 0}
-            </strong>
-        </div>
+            <div class="stat-card">
+                <small>Blacklist actives</small>
+                <strong>
+                    ${blacklist.count ?? 0}
+                </strong>
+            </div>
 
-    </div>
-
-
-    <div class="dashboard-grid">
-
-        <div class="panel">
-
-            <h2>
-                Activité récente
-            </h2>
-
-            <div
-                id="recent"
-                class="empty"
-            >
-                Chargement…
+            <div class="stat-card">
+                <small>Documents</small>
+                <strong>
+                    ${documents.count ?? 0}
+                </strong>
             </div>
 
         </div>
 
 
-        <div class="panel">
+        <div class="dashboard-grid">
 
-            <h2>
-                Prochains événements
-            </h2>
+            <div class="panel">
 
-            <div
-                id="events"
-                class="empty"
-            >
-                Chargement…
+                <h2>
+                    Activité récente
+                </h2>
+
+                <div
+                    id="recent"
+                    class="empty"
+                >
+                    Chargement…
+                </div>
+
+            </div>
+
+
+            <div class="panel">
+
+                <h2>
+                    Prochains événements
+                </h2>
+
+                <div
+                    id="events"
+                    class="empty"
+                >
+                    Chargement…
+                </div>
+
             </div>
 
         </div>
 
-    </div>
-
-`;
+    `;
 
 
-const {
-    data: logs
-} = await supabase
-    .from("audit_logs")
-    .select("*")
-    .order(
-        "created_at",
-        {
-            ascending: false
-        }
-    )
-    .limit(8);
+    const {
+        data: logs
+    } = await supabase
+        .from("audit_logs")
+        .select("*")
+        .order(
+            "created_at",
+            {
+                ascending: false
+            }
+        )
+        .limit(8);
 
 
-const recent =
-    document.querySelector(
-        "#recent"
-    );
+    const recent =
+        document.querySelector(
+            "#recent"
+        );
 
 
-if (recent) {
+    if (recent) {
 
-    recent.innerHTML =
-        logs?.length
+        recent.innerHTML =
+            logs?.length
 
-            ? logs
-                .map(log => `
+                ? logs
+                    .map(log => `
 
-                    <div class="event">
+                        <div class="event">
 
-                        <b>
-                            ${esc(
-                                log.action
-                            )}
-                        </b>
+                            <b>
+                                ${esc(
+                                    log.action
+                                )}
+                            </b>
 
-                        <small>
-                            ${
-                                new Date(
-                                    log.created_at
-                                ).toLocaleString(
-                                    "fr-FR"
-                                )
-                            }
-                        </small>
+                            <small>
+                                ${
+                                    new Date(
+                                        log.created_at
+                                    ).toLocaleString(
+                                        "fr-FR"
+                                    )
+                                }
+                            </small>
 
-                    </div>
+                        </div>
 
-                `)
-                .join("")
+                    `)
+                    .join("")
 
-            : "Aucune activité";
+                : "Aucune activité.";
 
-}
-
-
-const {
-    data: events
-} = await supabase
-    .from("agenda")
-    .select("*")
-    .gte(
-        "event_date",
-        new Date().toISOString()
-    )
-    .order(
-        "event_date",
-        {
-            ascending: true
-        }
-    )
-    .limit(5);
+    }
 
 
-const eventsElement =
-    document.querySelector(
-        "#events"
-    );
+    const {
+        data: events
+    } = await supabase
+        .from("agenda")
+        .select("*")
+        .gte(
+            "event_date",
+            new Date().toISOString()
+        )
+        .order(
+            "event_date"
+        )
+        .limit(5);
 
 
-if (eventsElement) {
+    const eventsElement =
+        document.querySelector(
+            "#events"
+        );
 
-    eventsElement.innerHTML =
-        events?.length
 
-            ? events
-                .map(event => `
+    if (eventsElement) {
 
-                    <div class="event">
+        eventsElement.innerHTML =
+            events?.length
 
-                        <b>
-                            ${esc(
-                                event.title
-                            )}
-                        </b>
+                ? events
+                    .map(event => `
 
-                        <small>
-                            ${
-                                new Date(
-                                    event.event_date
-                                ).toLocaleString(
-                                    "fr-FR"
-                                )
-                            }
-                        </small>
+                        <div class="event">
 
-                    </div>
+                            <b>
+                                ${esc(
+                                    event.title
+                                )}
+                            </b>
 
-                `)
-                .join("")
+                            <small>
+                                ${
+                                    new Date(
+                                        event.event_date
+                                    ).toLocaleString(
+                                        "fr-FR"
+                                    )
+                                }
+                            </small>
 
-            : "Aucun événement";
+                        </div>
+
+                    `)
+                    .join("")
+
+                : "Aucun événement.";
+
+    }
 
 }
-```
 
-}
 
 // ============================================================
-// PAGES PRINCIPALES
+// PAGES DE DONNEES
 // ============================================================
 
 async function generic(page) {
 
-```
-const map = {
+    const map = {
 
-    mariages: [
-        "Mariages",
-        "mariages"
-    ],
+        mariages: [
+            "Mariages",
+            "mariages"
+        ],
 
-    noms: [
-        "Changements de nom",
-        "name_changes"
-    ],
+        noms: [
+            "Changements de nom",
+            "name_changes"
+        ],
 
-    sanctions: [
-        "Sanctions",
-        "sanctions"
-    ],
+        sanctions: [
+            "Sanctions",
+            "sanctions"
+        ],
 
-    blacklist: [
-        "Blacklist",
-        "blacklist"
-    ],
+        blacklist: [
+            "Blacklist",
+            "blacklist"
+        ],
 
-    agenda: [
-        "Agenda",
-        "agenda"
-    ],
+        agenda: [
+            "Agenda",
+            "agenda"
+        ],
 
-    documents: [
-        "Documents",
-        "documents"
-    ]
+        documents: [
+            "Documents",
+            "documents"
+        ]
 
-};
-
-
-const config =
-    map[page];
+    };
 
 
-if (!config) {
+    const config =
+        map[page];
+
+
+    if (!config) {
+
+        content.innerHTML = `
+            <div class="panel">
+                <div class="empty">
+                    Page introuvable.
+                </div>
+            </div>
+        `;
+
+        return;
+
+    }
+
+
+    const [
+        label,
+        table
+    ] = config;
+
+
+    const {
+        data,
+        error
+    } = await supabase
+        .from(table)
+        .select(`
+            *,
+            creator:created_by (
+                display_name
+            )
+        `)
+        .order(
+            "created_at",
+            {
+                ascending: false
+            }
+        )
+        .limit(100);
+
+
+    if (error) {
+
+        content.innerHTML = `
+
+            <div class="panel">
+
+                <div class="empty">
+
+                    Erreur :
+                    ${esc(
+                        error.message
+                    )}
+
+                </div>
+
+            </div>
+
+        `;
+
+        return;
+
+    }
+
 
     content.innerHTML = `
 
-        <div class="panel">
+        <div class="page-intro">
 
-            <div class="empty">
+            <h2>
+                ${label}
+            </h2>
 
-                Page introuvable.
+            <p class="muted">
+                Données partagées de la Mairie.
+            </p>
+
+        </div>
+
+
+        <div class="toolbar">
+
+            <div class="toolbar-left">
+
+                <input
+                    class="search"
+                    id="search"
+                    placeholder="Rechercher…"
+                >
 
             </div>
+
+
+            ${
+                hasPermission(
+                    "add",
+                    table
+                )
+
+                    ? `
+                        <button
+                            class="primary-btn"
+                            id="add"
+                        >
+                            + Ajouter
+                        </button>
+                    `
+
+                    : ""
+            }
+
+        </div>
+
+
+        <div class="panel table-wrap">
+
+            <table class="table">
+
+                <thead>
+
+                    <tr>
+
+                        <th>
+                            Informations
+                        </th>
+
+                        <th>
+                            Ajouté par
+                        </th>
+
+                        <th>
+                            Créé le
+                        </th>
+
+                        <th>
+                            Actions
+                        </th>
+
+                    </tr>
+
+                </thead>
+
+
+                <tbody id="rows"></tbody>
+
+            </table>
 
         </div>
 
     `;
-
-    return;
-
-}
-
-
-const [
-    label,
-    table
-] = config;
-
-
-const {
-    data,
-    error
-} = await supabase
-    .from(table)
-    .select("*")
-    .order(
-        "created_at",
-        {
-            ascending: false
-        }
-    )
-    .limit(100);
-
-
-if (error) {
-
-    content.innerHTML = `
-
-        <div class="panel">
-
-            <div class="empty">
-
-                ${esc(
-                    error.message
-                )}
-
-            </div>
-
-        </div>
-
-    `;
-
-    return;
-
-}
-
-
-content.innerHTML = `
-
-    <div class="page-intro">
-
-        <h2>
-            ${label}
-        </h2>
-
-        <p class="muted">
-            Données partagées.
-        </p>
-
-    </div>
-
-
-    <div class="toolbar">
-
-        <div class="toolbar-left">
-
-            <input
-                class="search"
-                id="search"
-                placeholder="Rechercher…"
-            >
-
-        </div>
-
-
-        <button
-            class="primary-btn"
-            id="add"
-        >
-            + Ajouter
-        </button>
-
-    </div>
-
-
-    <div class="panel table-wrap">
-
-        <table class="table">
-
-            <thead>
-
-                <tr>
-
-                    <th>
-                        Informations
-                    </th>
-
-                    <th>
-                        Créé le
-                    </th>
-
-                    <th>
-                        Actions
-                    </th>
-
-                </tr>
-
-            </thead>
-
-
-            <tbody id="rows"></tbody>
-
-        </table>
-
-    </div>
-
-`;
-
-
-renderRows(
-    data || [],
-    table
-);
-
-
-document.querySelector(
-    "#add"
-).onclick = () => {
-
-    openAdd(
-        table,
-        label
-    );
-
-};
-
-
-document.querySelector(
-    "#search"
-).oninput = event => {
-
-    const value =
-        event.target.value
-            .toLowerCase();
 
 
     renderRows(
-
-        (data || [])
-            .filter(item =>
-
-                JSON.stringify(item)
-                    .toLowerCase()
-                    .includes(value)
-
-            ),
-
+        data || [],
         table
-
-    );
-
-};
-```
-
-}
-
-// ============================================================
-// AFFICHAGE DES DONNÉES
-// ============================================================
-
-function renderRows(
-rows,
-table
-) {
-
-```
-const rowsElement =
-    document.querySelector(
-        "#rows"
     );
 
 
-if (!rowsElement) {
+    const addButton =
+        document.querySelector(
+            "#add"
+        );
 
-    return;
 
-}
+    if (addButton) {
+
+        addButton.onclick =
+            () =>
+                openAdd(
+                    table,
+                    label
+                );
+
+    }
 
 
-rowsElement.innerHTML =
+    const search =
+        document.querySelector(
+            "#search"
+        );
 
-    rows.length
 
-        ? rows
-            .map(item => `
+    if (search) {
 
-                <tr>
+        search.oninput =
+            event => {
 
-                    <td>
+                const value =
+                    event.target.value
+                        .toLowerCase();
 
-                        ${esc(
+
+                renderRows(
+
+                    (data || [])
+                        .filter(item =>
                             JSON.stringify(
                                 item
                             )
-                            .replace(
-                                /[{}"]/g,
-                                ""
+                            .toLowerCase()
+                            .includes(
+                                value
                             )
-                            .slice(
-                                0,
-                                180
-                            )
-                        )}
+                        ),
 
-                    </td>
+                    table
 
+                );
 
-                    <td>
+            };
 
-                        ${
-                            item.created_at
+    }
 
-                                ? new Date(
-                                    item.created_at
-                                ).toLocaleDateString(
-                                    "fr-FR"
-                                )
-
-                                : "—"
-                        }
-
-                    </td>
+}
 
 
-                    <td>
+// ============================================================
+// AFFICHER LES LIGNES
+// ============================================================
 
-                        <div class="actions">
+function renderRows(
+    rows,
+    table
+) {
 
-                            <button
-                                class="secondary-btn"
-                                data-edit="${item.id}"
-                            >
-                                Modifier
-                            </button>
+    const rowsElement =
+        document.querySelector(
+            "#rows"
+        );
 
 
-                            <button
-                                class="danger-btn"
-                                data-del="${item.id}"
-                            >
-                                Supprimer
-                            </button>
+    if (!rowsElement) {
+        return;
+    }
 
-                        </div>
 
-                    </td>
+    if (!rows.length) {
 
-                </tr>
-
-            `)
-            .join("")
-
-        : `
+        rowsElement.innerHTML = `
 
             <tr>
 
-                <td colspan="3">
+                <td colspan="4">
 
                     <div class="empty">
 
-                        Aucune donnée
+                        Aucune donnée.
 
                     </div>
 
@@ -915,178 +1045,605 @@ rowsElement.innerHTML =
 
         `;
 
+        return;
 
-document
-    .querySelectorAll(
-        "[data-del]"
-    )
-    .forEach(button => {
-
-        button.onclick = async () => {
-
-            if (
-                !confirm(
-                    "Supprimer cet élément ?"
-                )
-            ) {
-
-                return;
-
-            }
+    }
 
 
-            const {
-                error
-            } = await supabase
-                .from(table)
-                .delete()
-                .eq(
-                    "id",
-                    button.dataset.del
-                );
+    rowsElement.innerHTML =
+        rows
+            .map(item => {
+
+                const own =
+                    item.created_by ===
+                    user.id;
 
 
-            if (error) {
+                const canEdit =
+                    isAdmin() ||
+                    hasPermission(
+                        "edit",
+                        table
+                    ) ||
+                    (
+                        own &&
+                        hasPermission(
+                            "edit_own",
+                            table
+                        )
+                    );
 
-                alert(
-                    error.message
-                );
 
-                return;
+                const canDelete =
+                    isAdmin() ||
+                    hasPermission(
+                        "delete",
+                        table
+                    ) ||
+                    (
+                        own &&
+                        hasPermission(
+                            "delete_own",
+                            table
+                        )
+                    );
 
-            }
+
+                return `
+
+                    <tr>
+
+                        <td>
+
+                            <strong>
+                                ${esc(
+                                    item.title
+                                )}
+                            </strong>
+
+                            <br>
+
+                            <span class="muted">
+
+                                ${esc(
+                                    item.details ||
+                                    "Aucun détail"
+                                )}
+
+                            </span>
+
+                        </td>
 
 
-            generic(
-                getPageFromTable(
-                    table
-                )
-            );
+                        <td>
 
-        };
+                            ${
+                                esc(
+                                    item.creator
+                                        ?.display_name ||
+                                    "Utilisateur inconnu"
+                                )
+                            }
 
-    });
-```
+                        </td>
+
+
+                        <td>
+
+                            ${
+                                item.created_at
+
+                                    ? new Date(
+                                        item.created_at
+                                    ).toLocaleDateString(
+                                        "fr-FR"
+                                    )
+
+                                    : "—"
+                            }
+
+                        </td>
+
+
+                        <td>
+
+                            <div class="actions">
+
+                                ${
+                                    canEdit
+
+                                        ? `
+
+                                            <button
+                                                class="secondary-btn"
+                                                data-edit="${item.id}"
+                                            >
+                                                Modifier
+                                            </button>
+
+                                        `
+
+                                        : ""
+                                }
+
+
+                                ${
+                                    canDelete
+
+                                        ? `
+
+                                            <button
+                                                class="danger-btn"
+                                                data-delete="${item.id}"
+                                            >
+                                                Supprimer
+                                            </button>
+
+                                        `
+
+                                        : ""
+                                }
+
+
+                                ${
+                                    !canEdit &&
+                                    !canDelete
+
+                                        ? `
+                                            <span class="muted">
+                                                Lecture seule
+                                            </span>
+                                          `
+
+                                        : ""
+                                }
+
+                            </div>
+
+                        </td>
+
+                    </tr>
+
+                `;
+
+            })
+            .join("");
+
+
+    document
+        .querySelectorAll(
+            "[data-delete]"
+        )
+        .forEach(button => {
+
+            button.onclick =
+                () =>
+                    deleteItem(
+                        table,
+                        button.dataset.delete
+                    );
+
+        });
+
+
+    document
+        .querySelectorAll(
+            "[data-edit]"
+        )
+        .forEach(button => {
+
+            button.onclick =
+                () =>
+                    editItem(
+                        table,
+                        button.dataset.edit
+                    );
+
+        });
 
 }
 
+
 // ============================================================
-// AJOUTER UN ÉLÉMENT
+// AJOUTER UN ELEMENT
 // ============================================================
 
 function openAdd(
-table,
-label
+    table,
+    label
 ) {
 
-```
-document.querySelector(
-    "#modalRoot"
-).innerHTML = `
+    modalRoot.innerHTML = `
 
-    <div class="modal-backdrop">
+        <div class="modal-backdrop">
 
-        <div class="modal">
+            <div class="modal">
 
-            <div class="modal-head">
+                <div class="modal-head">
 
-                <h2>
-                    Ajouter — ${label}
-                </h2>
+                    <h2>
+                        Ajouter — ${esc(label)}
+                    </h2>
 
-                <button
-                    class="close"
-                    type="button"
-                >
-                    ×
-                </button>
+                    <button
+                        class="close"
+                        type="button"
+                    >
+                        ×
+                    </button>
+
+                </div>
+
+
+                <form id="addForm">
+
+                    <label>
+
+                        Titre / Nom
+
+                        <input
+                            id="addTitle"
+                            required
+                        >
+
+                    </label>
+
+
+                    <label>
+
+                        Détails
+
+                        <textarea
+                            id="addDetails"
+                            rows="5"
+                        ></textarea>
+
+                    </label>
+
+
+                    ${
+                        table === "agenda"
+
+                            ? `
+
+                                <label>
+
+                                    Date de l'événement
+
+                                    <input
+                                        id="eventDate"
+                                        type="datetime-local"
+                                        required
+                                    >
+
+                                </label>
+
+                            `
+
+                            : ""
+                    }
+
+
+                    <button
+                        class="primary-btn"
+                        type="submit"
+                    >
+                        Enregistrer
+                    </button>
+
+                </form>
 
             </div>
 
+        </div>
 
-            <form id="addForm">
+    `;
 
-                <label>
 
-                    Titre / nom
+    modalRoot
+        .querySelector(
+            ".close"
+        )
+        .onclick =
+            () =>
+                modalRoot.innerHTML = "";
 
-                    <input
-                        id="title"
-                        required
+
+    modalRoot
+        .querySelector(
+            "#addForm"
+        )
+        .onsubmit =
+            async event => {
+
+                event.preventDefault();
+
+
+                const payload = {
+
+                    title:
+                        document.querySelector(
+                            "#addTitle"
+                        ).value
+                        .trim(),
+
+                    details:
+                        document.querySelector(
+                            "#addDetails"
+                        ).value
+                        .trim(),
+
+                    created_by:
+                        user.id
+
+                };
+
+
+                if (
+                    table ===
+                    "agenda"
+                ) {
+
+                    payload.event_date =
+                        new Date(
+                            document.querySelector(
+                                "#eventDate"
+                            ).value
+                        ).toISOString();
+
+                }
+
+
+                const {
+                    error
+                } = await supabase
+                    .from(table)
+                    .insert(
+                        payload
+                    );
+
+
+                if (error) {
+
+                    alert(
+                        error.message
+                    );
+
+                    return;
+
+                }
+
+
+                modalRoot.innerHTML =
+                    "";
+
+
+                generic(
+                    Object.keys({
+                        mariages: 1,
+                        name_changes: 1,
+                        sanctions: 1,
+                        blacklist: 1,
+                        agenda: 1,
+                        documents: 1
+                    })
+                    .find(
+                        key =>
+                            key === table
+                    ) || table
+                );
+
+            };
+
+}
+
+
+// ============================================================
+// MODIFIER
+// ============================================================
+
+async function editItem(
+    table,
+    id
+) {
+
+    const {
+        data: item,
+        error
+    } = await supabase
+        .from(table)
+        .select("*")
+        .eq(
+            "id",
+            id
+        )
+        .single();
+
+
+    if (error || !item) {
+
+        alert(
+            error?.message ||
+            "Élément introuvable."
+        );
+
+        return;
+
+    }
+
+
+    modalRoot.innerHTML = `
+
+        <div class="modal-backdrop">
+
+            <div class="modal">
+
+                <div class="modal-head">
+
+                    <h2>
+                        Modifier
+                    </h2>
+
+                    <button
+                        class="close"
+                        type="button"
                     >
+                        ×
+                    </button>
 
-                </label>
-
-
-                <label>
-
-                    Détails
-
-                    <textarea
-                        id="details"
-                        rows="5"
-                    ></textarea>
-
-                </label>
+                </div>
 
 
-                <button
-                    class="primary-btn"
-                    type="submit"
-                >
-                    Enregistrer
-                </button>
+                <form id="editForm">
 
-            </form>
+                    <label>
+
+                        Titre / Nom
+
+                        <input
+                            id="editTitle"
+                            value="${esc(
+                                item.title
+                            )}"
+                            required
+                        >
+
+                    </label>
+
+
+                    <label>
+
+                        Détails
+
+                        <textarea
+                            id="editDetails"
+                            rows="5"
+                        >${esc(
+                            item.details ||
+                            ""
+                        )}</textarea>
+
+                    </label>
+
+
+                    <button
+                        class="primary-btn"
+                        type="submit"
+                    >
+                        Enregistrer
+                    </button>
+
+                </form>
+
+            </div>
 
         </div>
 
-    </div>
-
-`;
+    `;
 
 
-document.querySelector(
-    "#modalRoot .close"
-).onclick = () => {
-
-    document.querySelector(
-        "#modalRoot"
-    ).innerHTML = "";
-
-};
+    modalRoot
+        .querySelector(
+            ".close"
+        )
+        .onclick =
+            () =>
+                modalRoot.innerHTML = "";
 
 
-document.querySelector(
-    "#addForm"
-).onsubmit = async event => {
+    modalRoot
+        .querySelector(
+            "#editForm"
+        )
+        .onsubmit =
+            async event => {
 
-    event.preventDefault();
+                event.preventDefault();
 
 
-    const payload = {
+                const {
+                    error
+                } = await supabase
+                    .from(table)
+                    .update({
 
-        title:
-            document.querySelector(
-                "#title"
-            ).value.trim(),
+                        title:
+                            document.querySelector(
+                                "#editTitle"
+                            ).value
+                            .trim(),
 
-        details:
-            document.querySelector(
-                "#details"
-            ).value.trim(),
+                        details:
+                            document.querySelector(
+                                "#editDetails"
+                            ).value
+                            .trim(),
 
-        created_by:
-            user.id
+                        updated_by:
+                            user.id,
 
-    };
+                        updated_at:
+                            new Date()
+                                .toISOString()
+
+                    })
+                    .eq(
+                        "id",
+                        id
+                    );
+
+
+                if (error) {
+
+                    alert(
+                        error.message
+                    );
+
+                    return;
+
+                }
+
+
+                modalRoot.innerHTML =
+                    "";
+
+
+                location.reload();
+
+            };
+
+}
+
+
+// ============================================================
+// SUPPRIMER
+// ============================================================
+
+async function deleteItem(
+    table,
+    id
+) {
+
+    if (
+        !confirm(
+            "Voulez-vous vraiment supprimer cet élément ?"
+        )
+    ) {
+
+        return;
+
+    }
 
 
     const {
         error
     } = await supabase
         .from(table)
-        .insert(payload);
+        .delete()
+        .eq(
+            "id",
+            id
+        );
 
 
     if (error) {
@@ -1100,59 +1657,15 @@ document.querySelector(
     }
 
 
-    document.querySelector(
-        "#modalRoot"
-    ).innerHTML = "";
-
-
-    generic(
-        getPageFromTable(
-            table
-        )
+    load(
+        document.querySelector(
+            ".nav-item.active"
+        )?.dataset.page ||
+        "dashboard"
     );
 
-};
-```
-
 }
 
-// ============================================================
-// TABLE → PAGE
-// ============================================================
-
-function getPageFromTable(
-table
-) {
-
-```
-const map = {
-
-    mariages:
-        "mariages",
-
-    name_changes:
-        "noms",
-
-    sanctions:
-        "sanctions",
-
-    blacklist:
-        "blacklist",
-
-    agenda:
-        "agenda",
-
-    documents:
-        "documents"
-
-};
-
-
-return map[table] ||
-    "dashboard";
-```
-
-}
 
 // ============================================================
 // DEMANDES DE COMPTES
@@ -1160,289 +1673,272 @@ return map[table] ||
 
 async function requests() {
 
-```
-if (!isAdmin()) {
+    if (!isAdmin()) {
 
-    content.innerHTML = `
+        content.innerHTML = `
 
-        <div class="panel">
+            <div class="panel">
 
-            <div class="empty">
+                <div class="empty">
 
-                Accès refusé.
+                    Accès réservé aux administrateurs.
 
-            </div>
-
-        </div>
-
-    `;
-
-    return;
-
-}
-
-
-const {
-    data,
-    error
-} = await supabase
-    .from("account_requests")
-    .select("*")
-    .order(
-        "created_at",
-        {
-            ascending: false
-        }
-    );
-
-
-if (error) {
-
-    content.innerHTML = `
-
-        <div class="panel">
-
-            <div class="empty">
-
-                ${esc(
-                    error.message
-                )}
+                </div>
 
             </div>
 
+        `;
+
+        return;
+
+    }
+
+
+    const {
+        data,
+        error
+    } = await supabase
+        .from("account_requests")
+        .select("*")
+        .order(
+            "created_at",
+            {
+                ascending: false
+            }
+        );
+
+
+    if (error) {
+
+        content.innerHTML = `
+
+            <div class="panel">
+
+                <div class="empty">
+
+                    ${esc(
+                        error.message
+                    )}
+
+                </div>
+
+            </div>
+
+        `;
+
+        return;
+
+    }
+
+
+    content.innerHTML = `
+
+        <div class="page-intro">
+
+            <h2>
+                Demandes de comptes
+            </h2>
+
+            <p class="muted">
+                Gérez les demandes d'accès à la Mairie.
+            </p>
+
         </div>
 
-    `;
 
-    return;
+        <div class="panel table-wrap">
 
-}
+            <table class="table">
 
+                <thead>
 
-content.innerHTML = `
+                    <tr>
 
-    <div class="page-intro">
+                        <th>
+                            Identifiant
+                        </th>
 
-        <h2>
-            Demandes de comptes
-        </h2>
+                        <th>
+                            Nom
+                        </th>
 
-        <p class="muted">
-            Validez ou refusez les demandes d'accès.
-        </p>
+                        <th>
+                            Motif
+                        </th>
 
-    </div>
+                        <th>
+                            Statut
+                        </th>
 
+                        <th>
+                            Actions
+                        </th>
 
-    <div class="panel table-wrap">
+                    </tr>
 
-        <table class="table">
-
-            <thead>
-
-                <tr>
-
-                    <th>
-                        Prénom
-                    </th>
-
-                    <th>
-                        Nom
-                    </th>
-
-                    <th>
-                        Identifiant
-                    </th>
-
-                    <th>
-                        Motif
-                    </th>
-
-                    <th>
-                        Statut
-                    </th>
-
-                    <th>
-                        Actions
-                    </th>
-
-                </tr>
-
-            </thead>
+                </thead>
 
 
-            <tbody>
+                <tbody>
 
-                ${
-                    (data || [])
-                        .map(request => `
+                    ${
+                        (data || [])
+                            .map(request => `
 
-                            <tr>
+                                <tr>
 
-                                <td>
-                                    ${esc(
-                                        request.first_name
-                                    )}
-                                </td>
+                                    <td>
+                                        ${esc(
+                                            request.username
+                                        )}
+                                    </td>
 
-                                <td>
-                                    ${esc(
-                                        request.last_name
-                                    )}
-                                </td>
+                                    <td>
+                                        ${esc(
+                                            request.first_name
+                                        )}
+                                        ${esc(
+                                            request.last_name
+                                        )}
+                                    </td>
 
-                                <td>
-                                    ${esc(
-                                        request.username
-                                    )}
-                                </td>
+                                    <td>
+                                        ${esc(
+                                            request.reason ||
+                                            "—"
+                                        )}
+                                    </td>
 
-                                <td>
-                                    ${esc(
-                                        request.reason ||
-                                        "—"
-                                    )}
-                                </td>
-
-                                <td>
-
-                                    <span class="badge">
-
+                                    <td>
                                         ${esc(
                                             request.status
                                         )}
+                                    </td>
 
-                                    </span>
+                                    <td>
 
-                                </td>
+                                        ${
+                                            request.status ===
+                                            "pending"
 
-                                <td>
+                                                ? `
 
-                                    ${
-                                        request.status ===
-                                        "pending"
+                                                    <button
+                                                        class="primary-btn"
+                                                        data-approve="${request.id}"
+                                                    >
+                                                        Accepter
+                                                    </button>
 
-                                            ? `
+                                                    <button
+                                                        class="danger-btn"
+                                                        data-reject="${request.id}"
+                                                    >
+                                                        Refuser
+                                                    </button>
 
-                                                <button
-                                                    class="primary-btn"
-                                                    data-approve="${request.id}"
-                                                >
-                                                    Accepter
-                                                </button>
+                                                `
 
+                                                : "—"
+                                        }
 
-                                                <button
-                                                    class="danger-btn"
-                                                    data-reject="${request.id}"
-                                                >
-                                                    Refuser
-                                                </button>
+                                    </td>
 
-                                            `
+                                </tr>
 
-                                            : "—"
-                                    }
+                            `)
+                            .join("")
+                    }
 
-                                </td>
+                </tbody>
 
-                            </tr>
+            </table>
 
-                        `)
-                        .join("")
+        </div>
 
-                }
-
-            </tbody>
-
-        </table>
-
-    </div>
-
-`;
+    `;
 
 
-document
-    .querySelectorAll(
-        "[data-approve]"
-    )
-    .forEach(button => {
+    document
+        .querySelectorAll(
+            "[data-approve]"
+        )
+        .forEach(button => {
 
-        button.onclick = () => {
+            button.onclick =
+                () =>
+                    decideRequest(
+                        button.dataset.approve,
+                        "approved"
+                    );
 
-            decide(
-                button.dataset.approve,
-                "approved"
-            );
-
-        };
-
-    });
+        });
 
 
-document
-    .querySelectorAll(
-        "[data-reject]"
-    )
-    .forEach(button => {
+    document
+        .querySelectorAll(
+            "[data-reject]"
+        )
+        .forEach(button => {
 
-        button.onclick = () => {
+            button.onclick =
+                () =>
+                    decideRequest(
+                        button.dataset.reject,
+                        "rejected"
+                    );
 
-            decide(
-                button.dataset.reject,
-                "rejected"
-            );
-
-        };
-
-    });
-```
+        });
 
 }
+
 
 // ============================================================
 // TRAITER UNE DEMANDE
 // ============================================================
 
-async function decide(
-id,
-status
+async function decideRequest(
+    id,
+    status
 ) {
 
-```
-const {
-    error
-} = await supabase.rpc(
-    "review_account_request",
-    {
-        p_request_id:
-            id,
+    const {
+        error
+    } = await supabase
+        .from("account_requests")
+        .update({
 
-        p_status:
             status,
 
-        p_reviewer_id:
-            user.id
+            reviewed_by:
+                user.id,
+
+            reviewed_at:
+                new Date()
+                    .toISOString()
+
+        })
+        .eq(
+            "id",
+            id
+        );
+
+
+    if (error) {
+
+        alert(
+            error.message
+        );
+
+        return;
 
     }
-);
 
 
-if (error) {
-
-    alert(
-        error.message
-    );
-
-    return;
+    requests();
 
 }
 
-
-requests();
-```
-
-}
 
 // ============================================================
 // GESTION DES COMPTES
@@ -1450,67 +1946,393 @@ requests();
 
 async function users() {
 
-```
-if (!isAdmin()) {
+    if (!isAdmin()) {
 
-    content.innerHTML = `
+        content.innerHTML = `
 
-        <div class="panel">
+            <div class="panel">
 
-            <div class="empty">
-
-                Accès refusé.
+                <div class="empty">
+                    Accès réservé aux administrateurs.
+                </div>
 
             </div>
 
-        </div>
+        `;
 
-    `;
+        return;
 
-    return;
-
-}
+    }
 
 
-const {
-    data,
-    error
-} = await supabase
-    .from("profiles")
-    .select(`
-        id,
-        username,
-        display_name,
-        active,
-        created_at,
-        user_roles (
-            roles (
-                id,
-                name,
-                icon,
-                is_admin
+    const {
+        data,
+        error
+    } = await supabase
+        .from("profiles")
+        .select(`
+            id,
+            username,
+            display_name,
+            active,
+            created_at,
+            user_roles (
+                roles (
+                    id,
+                    name,
+                    icon,
+                    is_admin
+                )
             )
-        )
-    `)
-    .order(
-        "created_at",
-        {
-            ascending: false
-        }
-    );
+        `)
+        .order(
+            "created_at",
+            {
+                ascending: false
+            }
+        );
 
 
-if (error) {
+    if (error) {
+
+        content.innerHTML = `
+
+            <div class="panel">
+
+                <div class="empty">
+
+                    ${esc(
+                        error.message
+                    )}
+
+                </div>
+
+            </div>
+
+        `;
+
+        return;
+
+    }
+
 
     content.innerHTML = `
 
-        <div class="panel">
+        <div class="page-intro">
 
-            <div class="empty">
+            <h2>
+                Comptes
+            </h2>
 
-                ${esc(
-                    error.message
-                )}
+            <p class="muted">
+                Gérez les comptes et leurs rôles.
+            </p>
+
+        </div>
+
+
+        <div class="panel table-wrap">
+
+            <table class="table">
+
+                <thead>
+
+                    <tr>
+
+                        <th>
+                            Utilisateur
+                        </th>
+
+                        <th>
+                            Identifiant
+                        </th>
+
+                        <th>
+                            Rôles
+                        </th>
+
+                        <th>
+                            Statut
+                        </th>
+
+                        <th>
+                            Actions
+                        </th>
+
+                    </tr>
+
+                </thead>
+
+
+                <tbody>
+
+                    ${
+                        (data || [])
+                            .map(profile => {
+
+                                const roles =
+                                    (profile.user_roles || [])
+                                        .map(
+                                            row =>
+                                                row.roles
+                                        )
+                                        .filter(Boolean);
+
+
+                                const roleHTML =
+                                    roles
+                                        .map(role => {
+
+                                            if (
+                                                role.is_admin
+                                            ) {
+
+                                                return `
+                                                    <span class="role-badge admin-role">
+                                                        👑 Admin
+                                                    </span>
+                                                `;
+
+                                            }
+
+
+                                            return `
+
+                                                <span class="role-badge">
+
+                                                    ${esc(
+                                                        role.icon ||
+                                                        ""
+                                                    )}
+
+                                                    ${esc(
+                                                        role.name
+                                                    )}
+
+                                                </span>
+
+                                            `;
+
+                                        })
+                                        .join("");
+
+
+                                return `
+
+                                    <tr>
+
+                                        <td>
+
+                                            <strong>
+                                                ${esc(
+                                                    profile.display_name
+                                                )}
+                                            </strong>
+
+                                        </td>
+
+
+                                        <td>
+
+                                            ${esc(
+                                                profile.username
+                                            )}
+
+                                        </td>
+
+
+                                        <td>
+
+                                            ${
+                                                roleHTML ||
+                                                "Aucun rôle"
+                                            }
+
+                                        </td>
+
+
+                                        <td>
+
+                                            ${
+                                                profile.active
+                                                    ? "Actif"
+                                                    : "Désactivé"
+                                            }
+
+                                        </td>
+
+
+                                        <td>
+
+                                            <button
+                                                class="secondary-btn"
+                                                data-manage-user="${profile.id}"
+                                            >
+                                                Gérer
+                                            </button>
+
+                                        </td>
+
+                                    </tr>
+
+                                `;
+
+                            })
+                            .join("")
+                    }
+
+                </tbody>
+
+            </table>
+
+        </div>
+
+    `;
+
+
+    document
+        .querySelectorAll(
+            "[data-manage-user]"
+        )
+        .forEach(button => {
+
+            button.onclick =
+                () =>
+                    manageUser(
+                        button.dataset.manageUser
+                    );
+
+        });
+
+}
+
+
+// ============================================================
+// GERER UN UTILISATEUR
+// ============================================================
+
+async function manageUser(
+    userId
+) {
+
+    const {
+        data: profile
+    } = await supabase
+        .from("profiles")
+        .select("*")
+        .eq(
+            "id",
+            userId
+        )
+        .single();
+
+
+    const {
+        data: roles
+    } = await supabase
+        .from("roles")
+        .select("*")
+        .order(
+            "name"
+        );
+
+
+    const {
+        data: assigned
+    } = await supabase
+        .from("user_roles")
+        .select("role_id")
+        .eq(
+            "user_id",
+            userId
+        );
+
+
+    const assignedIds =
+        (assigned || [])
+            .map(
+                item =>
+                    item.role_id
+            );
+
+
+    modalRoot.innerHTML = `
+
+        <div class="modal-backdrop">
+
+            <div class="modal">
+
+                <div class="modal-head">
+
+                    <h2>
+                        Gérer les rôles
+                    </h2>
+
+                    <button
+                        class="close"
+                        type="button"
+                    >
+                        ×
+                    </button>
+
+                </div>
+
+
+                <p>
+
+                    <strong>
+                        ${esc(
+                            profile.display_name
+                        )}
+                    </strong>
+
+                </p>
+
+
+                <form id="rolesForm">
+
+                    ${
+                        (roles || [])
+                            .map(role => `
+
+                                <label>
+
+                                    <input
+                                        type="checkbox"
+                                        value="${role.id}"
+                                        ${
+                                            assignedIds.includes(
+                                                role.id
+                                            )
+                                                ? "checked"
+                                                : ""
+                                        }
+                                    >
+
+                                    ${esc(
+                                        role.icon ||
+                                        ""
+                                    )}
+
+                                    ${esc(
+                                        role.name
+                                    )}
+
+                                </label>
+
+                            `)
+                            .join("")
+                    }
+
+
+                    <button
+                        class="primary-btn"
+                        type="submit"
+                    >
+                        Enregistrer
+                    </button>
+
+                </form>
 
             </div>
 
@@ -1518,79 +2340,201 @@ if (error) {
 
     `;
 
-    return;
+
+    modalRoot
+        .querySelector(
+            ".close"
+        )
+        .onclick =
+            () =>
+                modalRoot.innerHTML = "";
+
+
+    modalRoot
+        .querySelector(
+            "#rolesForm"
+        )
+        .onsubmit =
+            async event => {
+
+                event.preventDefault();
+
+
+                const selected =
+                    Array.from(
+                        modalRoot
+                            .querySelectorAll(
+                                "input[type=checkbox]:checked"
+                            )
+                    )
+                    .map(
+                        input =>
+                            input.value
+                    );
+
+
+                await supabase
+                    .from("user_roles")
+                    .delete()
+                    .eq(
+                        "user_id",
+                        userId
+                    );
+
+
+                if (selected.length) {
+
+                    await supabase
+                        .from("user_roles")
+                        .insert(
+
+                            selected.map(
+                                roleId => ({
+                                    user_id:
+                                        userId,
+
+                                    role_id:
+                                        roleId
+                                })
+                            )
+
+                        );
+
+                }
+
+
+                modalRoot.innerHTML =
+                    "";
+
+
+                users();
+
+            };
 
 }
 
 
-content.innerHTML = `
+// ============================================================
+// GESTION DES ROLES
+// ============================================================
 
-    <div class="page-intro">
+async function roles() {
 
-        <h2>
-            Comptes
-        </h2>
+    if (!isAdmin()) {
 
-        <p class="muted">
-            Gérez les comptes et leurs rôles.
-        </p>
+        content.innerHTML = `
 
-    </div>
+            <div class="panel">
 
+                <div class="empty">
+                    Accès réservé aux administrateurs.
+                </div>
 
-    <div class="panel table-wrap">
+            </div>
 
-        <table class="table">
+        `;
 
-            <thead>
+        return;
 
-                <tr>
-
-                    <th>
-                        Utilisateur
-                    </th>
-
-                    <th>
-                        Nom affiché
-                    </th>
-
-                    <th>
-                        Rôles
-                    </th>
-
-                    <th>
-                        Statut
-                    </th>
-
-                </tr>
-
-            </thead>
+    }
 
 
-            <tbody>
-
-                ${
-                    (data || [])
-                        .map(profile => {
-
-                            const roles =
-                                (profile.user_roles || [])
-                                    .map(
-                                        item =>
-                                            item.roles
-                                    )
-                                    .filter(Boolean);
+    const {
+        data,
+        error
+    } = await supabase
+        .from("roles")
+        .select("*")
+        .order(
+            "name"
+        );
 
 
-                            return `
+    if (error) {
+
+        alert(
+            error.message
+        );
+
+        return;
+
+    }
+
+
+    content.innerHTML = `
+
+        <div class="page-intro">
+
+            <h2>
+                Rôles
+            </h2>
+
+            <p class="muted">
+                Créez et gérez les rôles de la Mairie.
+            </p>
+
+        </div>
+
+
+        <div class="toolbar">
+
+            <button
+                class="primary-btn"
+                id="createRole"
+            >
+                + Créer un rôle
+            </button>
+
+        </div>
+
+
+        <div class="panel table-wrap">
+
+            <table class="table">
+
+                <thead>
+
+                    <tr>
+
+                        <th>
+                            Rôle
+                        </th>
+
+                        <th>
+                            Description
+                        </th>
+
+                        <th>
+                            Administration
+                        </th>
+
+                        <th>
+                            Actions
+                        </th>
+
+                    </tr>
+
+                </thead>
+
+
+                <tbody>
+
+                    ${
+                        (data || [])
+                            .map(role => `
 
                                 <tr>
 
                                     <td>
 
+                                        ${esc(
+                                            role.icon ||
+                                            ""
+                                        )}
+
                                         <strong>
                                             ${esc(
-                                                profile.username
+                                                role.name
                                             )}
                                         </strong>
 
@@ -1600,7 +2544,8 @@ content.innerHTML = `
                                     <td>
 
                                         ${esc(
-                                            profile.display_name
+                                            role.description ||
+                                            "—"
                                         )}
 
                                     </td>
@@ -1609,28 +2554,9 @@ content.innerHTML = `
                                     <td>
 
                                         ${
-                                            roles.length
-
-                                                ? roles
-                                                    .map(role => `
-
-                                                        <span class="user-role">
-
-                                                            ${esc(
-                                                                role.icon ||
-                                                                ""
-                                                            )}
-
-                                                            ${esc(
-                                                                role.name
-                                                            )}
-
-                                                        </span>
-
-                                                    `)
-                                                    .join(" • ")
-
-                                                : "Aucun rôle"
+                                            role.is_admin
+                                                ? "👑 Oui"
+                                                : "Non"
                                         }
 
                                     </td>
@@ -1638,520 +2564,339 @@ content.innerHTML = `
 
                                     <td>
 
-                                        <span class="badge">
+                                        <button
+                                            class="secondary-btn"
+                                            data-edit-role="${role.id}"
+                                        >
+                                            Modifier
+                                        </button>
 
-                                            ${
-                                                profile.active
-                                                    ? "Actif"
-                                                    : "Désactivé"
-                                            }
-
-                                        </span>
+                                        <button
+                                            class="danger-btn"
+                                            data-delete-role="${role.id}"
+                                        >
+                                            Supprimer
+                                        </button>
 
                                     </td>
 
                                 </tr>
 
-                            `;
+                            `)
+                            .join("")
+                    }
 
-                        })
-                        .join("")
+                </tbody>
 
-                }
-
-            </tbody>
-
-        </table>
-
-    </div>
-
-`;
-```
-
-}
-
-// ============================================================
-// GESTION DES RÔLES
-// ============================================================
-
-async function roles() {
-
-```
-if (!isAdmin()) {
-
-    content.innerHTML = `
-
-        <div class="panel">
-
-            <div class="empty">
-                Accès refusé.
-            </div>
+            </table>
 
         </div>
 
     `;
 
-    return;
 
-}
-
-
-const {
-    data,
-    error
-} = await supabase
-    .from("roles")
-    .select("*")
-    .order(
-        "name"
-    );
-
-
-if (error) {
-
-    content.innerHTML = `
-
-        <div class="panel">
-
-            <div class="empty">
-
-                ${esc(
-                    error.message
-                )}
-
-            </div>
-
-        </div>
-
-    `;
-
-    return;
-
-}
-
-
-content.innerHTML = `
-
-    <div class="page-intro">
-
-        <h2>
-            Rôles
-        </h2>
-
-        <p class="muted">
-            Créez, modifiez et supprimez les rôles.
-        </p>
-
-    </div>
-
-
-    <div class="toolbar">
-
-        <button
-            class="primary-btn"
-            id="createRole"
-        >
-            + Créer un rôle
-        </button>
-
-    </div>
-
-
-    <div class="panel table-wrap">
-
-        <table class="table">
-
-            <thead>
-
-                <tr>
-
-                    <th>
-                        Icône
-                    </th>
-
-                    <th>
-                        Nom
-                    </th>
-
-                    <th>
-                        Description
-                    </th>
-
-                    <th>
-                        Administration
-                    </th>
-
-                    <th>
-                        Actions
-                    </th>
-
-                </tr>
-
-            </thead>
-
-
-            <tbody>
-
-                ${
-                    (data || [])
-                        .map(role => `
-
-                            <tr>
-
-                                <td>
-                                    ${esc(
-                                        role.icon ||
-                                        ""
-                                    )}
-                                </td>
-
-                                <td>
-                                    <strong>
-                                        ${esc(
-                                            role.name
-                                        )}
-                                    </strong>
-                                </td>
-
-                                <td>
-                                    ${esc(
-                                        role.description ||
-                                        "—"
-                                    )}
-                                </td>
-
-                                <td>
-
-                                    ${
-                                        role.is_admin
-                                            ? "👑 Oui"
-                                            : "Non"
-                                    }
-
-                                </td>
-
-                                <td>
-
-                                    <button
-                                        class="secondary-btn"
-                                        data-edit-role="${role.id}"
-                                    >
-                                        Modifier
-                                    </button>
-
-
-                                    <button
-                                        class="danger-btn"
-                                        data-delete-role="${role.id}"
-                                    >
-                                        Supprimer
-                                    </button>
-
-                                </td>
-
-                            </tr>
-
-                        `)
-                        .join("")
-
-                }
-
-            </tbody>
-
-        </table>
-
-    </div>
-
-`;
-
-
-document.querySelector(
-    "#createRole"
-).onclick = () => {
-
-    openRoleModal();
-
-};
-
-
-document
-    .querySelectorAll(
-        "[data-edit-role]"
-    )
-    .forEach(button => {
-
-        button.onclick = () => {
-
-            const role =
-                data.find(
-                    item =>
-                        item.id ===
+    document
+        .querySelector(
+            "#createRole"
+        )
+        .onclick =
+            () =>
+                openRoleForm();
+
+
+    document
+        .querySelectorAll(
+            "[data-edit-role]"
+        )
+        .forEach(button => {
+
+            button.onclick =
+                () =>
+                    openRoleForm(
                         button.dataset.editRole
-                );
+                    );
+
+        });
 
 
-            if (role) {
+    document
+        .querySelectorAll(
+            "[data-delete-role]"
+        )
+        .forEach(button => {
 
-                openRoleModal(
-                    role
-                );
+            button.onclick =
+                () =>
+                    deleteRole(
+                        button.dataset.deleteRole
+                    );
 
-            }
-
-        };
-
-    });
-
-
-document
-    .querySelectorAll(
-        "[data-delete-role]"
-    )
-    .forEach(button => {
-
-        button.onclick = async () => {
-
-            if (
-                !confirm(
-                    "Supprimer ce rôle ? Les utilisateurs qui possèdent ce rôle le perdront."
-                )
-            ) {
-
-                return;
-
-            }
-
-
-            const {
-                error
-            } = await supabase
-                .from("roles")
-                .delete()
-                .eq(
-                    "id",
-                    button.dataset.deleteRole
-                );
-
-
-            if (error) {
-
-                alert(
-                    error.message
-                );
-
-                return;
-
-            }
-
-
-            roles();
-
-        };
-
-    });
-```
+        });
 
 }
 
+
 // ============================================================
-// MODALE RÔLE
+// FORMULAIRE ROLE
 // ============================================================
 
-function openRoleModal(
-role = null
+async function openRoleForm(
+    roleId = null
 ) {
 
-```
-document.querySelector(
-    "#modalRoot"
-).innerHTML = `
-
-    <div class="modal-backdrop">
-
-        <div class="modal">
-
-            <div class="modal-head">
-
-                <h2>
-
-                    ${
-                        role
-                            ? "Modifier le rôle"
-                            : "Créer un rôle"
-                    }
-
-                </h2>
+    let role = null;
 
 
-                <button
-                    class="close"
-                    type="button"
-                >
-                    ×
-                </button>
+    if (roleId) {
 
-            </div>
-
-
-            <form id="roleForm">
-
-                <label>
-
-                    Nom
-
-                    <input
-                        id="roleName"
-                        value="${esc(
-                            role?.name ||
-                            ""
-                        )}"
-                        required
-                    >
-
-                </label>
-
-
-                <label>
-
-                    Description
-
-                    <textarea
-                        id="roleDescription"
-                        rows="4"
-                    >${esc(
-                        role?.description ||
-                        ""
-                    )}</textarea>
-
-                </label>
-
-
-                <label>
-
-                    Icône
-
-                    <input
-                        id="roleIcon"
-                        value="${esc(
-                            role?.icon ||
-                            ""
-                        )}"
-                        placeholder="Ex : 🏛️"
-                    >
-
-                </label>
-
-
-                <label>
-
-                    <input
-                        id="roleAdmin"
-                        type="checkbox"
-                        ${
-                            role?.is_admin
-                                ? "checked"
-                                : ""
-                        }
-                    >
-
-                    Ce rôle est administrateur
-
-                </label>
-
-
-                <button
-                    class="primary-btn"
-                    type="submit"
-                >
-
-                    ${
-                        role
-                            ? "Enregistrer"
-                            : "Créer le rôle"
-                    }
-
-                </button>
-
-            </form>
-
-        </div>
-
-    </div>
-
-`;
-
-
-document.querySelector(
-    "#modalRoot .close"
-).onclick = () => {
-
-    document.querySelector(
-        "#modalRoot"
-    ).innerHTML = "";
-
-};
-
-
-document.querySelector(
-    "#roleForm"
-).onsubmit = async event => {
-
-    event.preventDefault();
-
-
-    const payload = {
-
-        name:
-            document.querySelector(
-                "#roleName"
-            ).value.trim(),
-
-        description:
-            document.querySelector(
-                "#roleDescription"
-            ).value.trim(),
-
-        icon:
-            document.querySelector(
-                "#roleIcon"
-            ).value.trim(),
-
-        is_admin:
-            document.querySelector(
-                "#roleAdmin"
-            ).checked
-
-    };
-
-
-    let result;
-
-
-    if (role) {
-
-        result =
+        const result =
             await supabase
                 .from("roles")
-                .update(payload)
+                .select("*")
                 .eq(
                     "id",
-                    role.id
-                );
+                    roleId
+                )
+                .single();
 
-    } else {
 
-        result =
-            await supabase
-                .from("roles")
-                .insert(payload);
+        role =
+            result.data;
 
     }
 
 
-    if (result.error) {
+    modalRoot.innerHTML = `
+
+        <div class="modal-backdrop">
+
+            <div class="modal">
+
+                <div class="modal-head">
+
+                    <h2>
+                        ${
+                            role
+                                ? "Modifier le rôle"
+                                : "Créer un rôle"
+                        }
+                    </h2>
+
+                    <button
+                        class="close"
+                        type="button"
+                    >
+                        ×
+                    </button>
+
+                </div>
+
+
+                <form id="roleForm">
+
+                    <label>
+
+                        Nom
+
+                        <input
+                            id="roleName"
+                            value="${esc(
+                                role?.name ||
+                                ""
+                            )}"
+                            required
+                        >
+
+                    </label>
+
+
+                    <label>
+
+                        Description
+
+                        <textarea
+                            id="roleDescription"
+                        >${esc(
+                            role?.description ||
+                            ""
+                        )}</textarea>
+
+                    </label>
+
+
+                    <label>
+
+                        Icône
+
+                        <input
+                            id="roleIcon"
+                            value="${esc(
+                                role?.icon ||
+                                ""
+                            )}"
+                            placeholder="Ex : 🏛️"
+                        >
+
+                    </label>
+
+
+                    <label>
+
+                        <input
+                            id="roleAdmin"
+                            type="checkbox"
+                            ${
+                                role?.is_admin
+                                    ? "checked"
+                                    : ""
+                            }
+                        >
+
+                        Ce rôle est administrateur
+                        👑
+
+                    </label>
+
+
+                    <button
+                        class="primary-btn"
+                        type="submit"
+                    >
+                        Enregistrer
+                    </button>
+
+                </form>
+
+            </div>
+
+        </div>
+
+    `;
+
+
+    modalRoot
+        .querySelector(
+            ".close"
+        )
+        .onclick =
+            () =>
+                modalRoot.innerHTML = "";
+
+
+    modalRoot
+        .querySelector(
+            "#roleForm"
+        )
+        .onsubmit =
+            async event => {
+
+                event.preventDefault();
+
+
+                const payload = {
+
+                    name:
+                        document.querySelector(
+                            "#roleName"
+                        ).value
+                        .trim(),
+
+                    description:
+                        document.querySelector(
+                            "#roleDescription"
+                        ).value
+                        .trim(),
+
+                    icon:
+                        document.querySelector(
+                            "#roleIcon"
+                        ).value
+                        .trim(),
+
+                    is_admin:
+                        document.querySelector(
+                            "#roleAdmin"
+                        ).checked
+
+                };
+
+
+                const result =
+                    roleId
+
+                        ? await supabase
+                            .from("roles")
+                            .update(
+                                payload
+                            )
+                            .eq(
+                                "id",
+                                roleId
+                            )
+
+                        : await supabase
+                            .from("roles")
+                            .insert(
+                                payload
+                            );
+
+
+                if (result.error) {
+
+                    alert(
+                        result.error.message
+                    );
+
+                    return;
+
+                }
+
+
+                modalRoot.innerHTML =
+                    "";
+
+
+                roles();
+
+            };
+
+}
+
+
+// ============================================================
+// SUPPRIMER UN ROLE
+// ============================================================
+
+async function deleteRole(
+    roleId
+) {
+
+    if (
+        !confirm(
+            "Supprimer définitivement ce rôle ?"
+        )
+    ) {
+
+        return;
+
+    }
+
+
+    const {
+        error
+    } = await supabase
+        .from("roles")
+        .delete()
+        .eq(
+            "id",
+            roleId
+        );
+
+
+    if (error) {
 
         alert(
-            result.error.message
+            error.message
         );
 
         return;
@@ -2159,17 +2904,10 @@ document.querySelector(
     }
 
 
-    document.querySelector(
-        "#modalRoot"
-    ).innerHTML = "";
-
-
     roles();
 
-};
-```
-
 }
+
 
 // ============================================================
 // PERMISSIONS
@@ -2177,172 +2915,358 @@ document.querySelector(
 
 async function permissions() {
 
-```
-if (!isAdmin()) {
+    if (!isAdmin()) {
+
+        content.innerHTML = `
+
+            <div class="panel">
+
+                <div class="empty">
+                    Accès réservé aux administrateurs.
+                </div>
+
+            </div>
+
+        `;
+
+        return;
+
+    }
+
+
+    const {
+        data: rolesList
+    } = await supabase
+        .from("roles")
+        .select("*")
+        .order(
+            "name"
+        );
+
+
+    const {
+        data: permissionsList
+    } = await supabase
+        .from("permissions")
+        .select("*")
+        .order(
+            "name"
+        );
+
 
     content.innerHTML = `
 
+        <div class="page-intro">
+
+            <h2>
+                Permissions
+            </h2>
+
+            <p class="muted">
+                Attribuez les permissions aux rôles.
+            </p>
+
+        </div>
+
+
         <div class="panel">
 
-            <div class="empty">
-                Accès refusé.
+            <label>
+
+                Rôle
+
+                <select id="permissionRole">
+
+                    <option value="">
+                        Sélectionner un rôle
+                    </option>
+
+                    ${
+                        (rolesList || [])
+                            .map(role => `
+
+                                <option
+                                    value="${role.id}"
+                                >
+
+                                    ${
+                                        role.is_admin
+                                            ? "👑 "
+                                            : ""
+                                    }
+
+                                    ${esc(
+                                        role.name
+                                    )}
+
+                                </option>
+
+                            `)
+                            .join("")
+                    }
+
+                </select>
+
+            </label>
+
+
+            <div id="permissionEditor">
+
+                <div class="empty">
+
+                    Sélectionnez un rôle.
+
+                </div>
+
             </div>
 
         </div>
 
     `;
 
-    return;
 
-}
+    document
+        .querySelector(
+            "#permissionRole"
+        )
+        .onchange =
+            event => {
 
+                if (
+                    !event.target.value
+                ) {
 
-const {
-    data: rolesData
-} = await supabase
-    .from("roles")
-    .select("*")
-    .order(
-        "name"
-    );
-
-
-const {
-    data: permissionsData
-} = await supabase
-    .from("permissions")
-    .select("*")
-    .order(
-        "name"
-    );
-
-
-content.innerHTML = `
-
-    <div class="page-intro">
-
-        <h2>
-            Permissions
-        </h2>
-
-        <p class="muted">
-            Gérez les permissions accordées à chaque rôle.
-        </p>
-
-    </div>
-
-
-    <div class="panel table-wrap">
-
-        <table class="table">
-
-            <thead>
-
-                <tr>
-
-                    <th>
-                        Rôle
-                    </th>
-
-                    <th>
-                        Permissions
-                    </th>
-
-                </tr>
-
-            </thead>
-
-
-            <tbody>
-
-                ${
-                    (rolesData || [])
-                        .map(role => `
-
-                            <tr>
-
-                                <td>
-
-                                    <strong>
-
-                                        ${esc(
-                                            role.icon ||
-                                            ""
-                                        )}
-
-                                        ${esc(
-                                            role.name
-                                        )}
-
-                                    </strong>
-
-                                </td>
-
-
-                                <td>
-
-                                    ${
-                                        role.is_admin
-
-                                            ? "👑 Toutes les permissions"
-
-                                            : (permissionsData || [])
-                                                .map(
-                                                    permission => `
-
-                                                        <label style="margin-right:15px">
-
-                                                            <input
-                                                                type="checkbox"
-                                                                data-permission-role="${role.id}"
-                                                                data-permission-id="${permission.id}"
-                                                            >
-
-                                                            ${esc(
-                                                                permission.name
-                                                            )}
-
-                                                        </label>
-
-                                                    `
-                                                )
-                                                .join("")
-                                    }
-
-                                </td>
-
-                            </tr>
-
-                        `)
-                        .join("")
+                    return;
 
                 }
 
-            </tbody>
 
-        </table>
+                renderPermissionEditor(
 
-    </div>
+                    event.target.value,
 
-`;
-```
+                    permissionsList || []
+
+                );
+
+            };
 
 }
 
+
 // ============================================================
-// DÉMARRAGE
+// EDITEUR PERMISSIONS
+// ============================================================
+
+async function renderPermissionEditor(
+    roleId,
+    permissionsList
+) {
+
+    const {
+        data: assigned
+    } = await supabase
+        .from("role_permissions")
+        .select(`
+            permission_id,
+            module
+        `)
+        .eq(
+            "role_id",
+            roleId
+        );
+
+
+    const modules = [
+
+        "mariages",
+        "name_changes",
+        "sanctions",
+        "blacklist",
+        "agenda",
+        "documents"
+
+    ];
+
+
+    const editor =
+        document.querySelector(
+            "#permissionEditor"
+        );
+
+
+    editor.innerHTML = `
+
+        <form id="permissionForm">
+
+            ${
+
+                modules
+                    .map(module => `
+
+                        <div class="panel">
+
+                            <h3>
+                                ${esc(
+                                    module
+                                )}
+                            </h3>
+
+
+                            ${
+                                permissionsList
+                                    .map(permission => {
+
+                                        const checked =
+                                            (assigned || [])
+                                                .some(
+                                                    item =>
+                                                        item.permission_id ===
+                                                        permission.id &&
+                                                        item.module ===
+                                                        module
+                                                );
+
+
+                                        return `
+
+                                            <label>
+
+                                                <input
+                                                    type="checkbox"
+                                                    data-permission="${permission.id}"
+                                                    data-module="${module}"
+                                                    ${
+                                                        checked
+                                                            ? "checked"
+                                                            : ""
+                                                    }
+                                                >
+
+                                                ${esc(
+                                                    permission.name
+                                                )}
+
+                                            </label>
+
+                                        `;
+
+                                    })
+                                    .join("")
+                            }
+
+                        </div>
+
+                    `)
+                    .join("")
+
+            }
+
+
+            <button
+                class="primary-btn"
+                type="submit"
+            >
+                Enregistrer les permissions
+            </button>
+
+        </form>
+
+    `;
+
+
+    document
+        .querySelector(
+            "#permissionForm"
+        )
+        .onsubmit =
+            async event => {
+
+                event.preventDefault();
+
+
+                await supabase
+                    .from("role_permissions")
+                    .delete()
+                    .eq(
+                        "role_id",
+                        roleId
+                    );
+
+
+                const selected =
+                    Array.from(
+                        document
+                            .querySelectorAll(
+                                "#permissionForm input[type=checkbox]:checked"
+                            )
+                    );
+
+
+                if (selected.length) {
+
+                    const rows =
+                        selected.map(
+                            input => ({
+
+                                role_id:
+                                    roleId,
+
+                                permission_id:
+                                    input.dataset.permission,
+
+                                module:
+                                    input.dataset.module
+
+                            })
+                        );
+
+
+                    const {
+                        error
+                    } = await supabase
+                        .from("role_permissions")
+                        .insert(
+                            rows
+                        );
+
+
+                    if (error) {
+
+                        alert(
+                            error.message
+                        );
+
+                        return;
+
+                    }
+
+                }
+
+
+                alert(
+                    "Permissions enregistrées."
+                );
+
+            };
+
+}
+
+
+// ============================================================
+// DEMARRAGE
 // ============================================================
 
 async function startApp() {
 
-```
-await initializeUser();
+    await loadCurrentUser();
 
-await load(
-    "dashboard"
-);
-```
+    await load(
+        "dashboard"
+    );
 
 }
 
+
 startApp();
+```
