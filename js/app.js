@@ -1,9 +1,8 @@
-```javascript
 import { supabase } from "./supabase.js";
 
-// ============================================================
-// UTILISATEUR CONNECTÉ
-// ============================================================
+/* ============================================================
+   UTILISATEUR CONNECTÉ
+============================================================ */
 
 const user = JSON.parse(
     sessionStorage.getItem("msa_user") || "null"
@@ -15,367 +14,155 @@ if (!user) {
 }
 
 
-// ============================================================
-// ELEMENTS PRINCIPAUX
-// ============================================================
+/* ============================================================
+   ELEMENTS
+============================================================ */
 
 const content = document.querySelector("#content");
 const title = document.querySelector("#pageTitle");
 const welcome = document.querySelector("#welcomeText");
 const userMini = document.querySelector("#userMini");
+const logoutBtn = document.querySelector("#logoutBtn");
+const mobileMenu = document.querySelector("#mobileMenu");
 const modalRoot = document.querySelector("#modalRoot");
 
 
-// ============================================================
-// VARIABLES GLOBALES
-// ============================================================
-
-let currentUser = null;
-let currentRoles = [];
-let currentPermissions = [];
-
-
-// ============================================================
-// ECHAPPEMENT HTML
-// ============================================================
+/* ============================================================
+   SECURITE HTML
+============================================================ */
 
 function esc(value) {
 
     return String(value ?? "")
-        .replace(/[&<>"']/g, char => ({
-            "&": "&amp;",
-            "<": "&lt;",
-            ">": "&gt;",
-            '"': "&quot;",
-            "'": "&#039;"
-        }[char]));
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
 
 }
 
 
-// ============================================================
-// CHARGER LE PROFIL ET LES ROLES
-// ============================================================
+/* ============================================================
+   ROLES UTILISATEUR
+============================================================ */
 
-async function loadCurrentUser() {
+const userRoles = Array.isArray(user.roles)
+    ? user.roles
+    : [];
 
-    const {
-        data: profile,
-        error: profileError
-    } = await supabase
-        .from("profiles")
-        .select("*")
-        .eq("id", user.id)
-        .single();
+const isAdmin = Boolean(user.is_admin);
 
 
-    if (profileError || !profile) {
+/* ============================================================
+   AFFICHAGE UTILISATEUR
+============================================================ */
 
-        console.error(
-            "Impossible de charger le profil :",
-            profileError
-        );
-
-        sessionStorage.removeItem("msa_user");
-
-        window.location.href = "login.html";
-
-        return;
-
-    }
-
-
-    currentUser = profile;
-
-
-    const {
-        data: roleRows,
-        error: roleError
-    } = await supabase
-        .from("user_roles")
-        .select(`
-            role_id,
-            roles (
-                id,
-                name,
-                description,
-                icon,
-                is_admin
-            )
-        `)
-        .eq("user_id", user.id);
-
-
-    if (roleError) {
-
-        console.error(
-            "Erreur chargement rôles :",
-            roleError
-        );
-
-        currentRoles = [];
-
-    } else {
-
-        currentRoles = (roleRows || [])
-            .map(row => row.roles)
-            .filter(Boolean);
-
-    }
-
-
-    await loadCurrentPermissions();
-
-    renderUserIdentity();
-
-    applyNavigationPermissions();
-
-}
-
-
-// ============================================================
-// CHARGER LES PERMISSIONS
-// ============================================================
-
-async function loadCurrentPermissions() {
-
-    currentPermissions = [];
-
-
-    if (isAdmin()) {
-
-        currentPermissions = [
-            "view",
-            "add",
-            "edit",
-            "edit_own",
-            "delete",
-            "delete_own"
-        ];
-
-        return;
-
-    }
-
-
-    if (!currentRoles.length) {
-        return;
-    }
-
-
-    const roleIds = currentRoles.map(
-        role => role.id
-    );
-
-
-    const {
-        data,
-        error
-    } = await supabase
-        .from("role_permissions")
-        .select(`
-            module,
-            permission_id,
-            permissions (
-                name
-            )
-        `)
-        .in("role_id", roleIds);
-
-
-    if (error) {
-
-        console.error(
-            "Erreur chargement permissions :",
-            error
-        );
-
-        return;
-
-    }
-
-
-    currentPermissions = (data || [])
-        .map(row => ({
-            module: row.module,
-            permission: row.permissions?.name
-        }));
-
-}
-
-
-// ============================================================
-// VERIFIER SI ADMIN
-// ============================================================
-
-function isAdmin() {
-
-    return currentRoles.some(
-        role => role.is_admin === true
-    );
-
-}
-
-
-// ============================================================
-// VERIFIER UNE PERMISSION
-// ============================================================
-
-function hasPermission(
-    permission,
-    module
-) {
-
-    if (isAdmin()) {
-        return true;
-    }
-
-
-    return currentPermissions.some(
-        item =>
-            item.permission === permission &&
-            (
-                item.module === module ||
-                item.module === "*"
-            )
-    );
-
-}
-
-
-// ============================================================
-// IDENTITE UTILISATEUR
-// ============================================================
-
-function renderUserIdentity() {
+function renderUser() {
 
     if (!userMini) {
         return;
     }
 
-
-    const roleBadges = currentRoles
-        .map(role => {
-
-            if (role.is_admin) {
-
-                return `
-                    <span class="role-badge admin-role">
-                        👑 Admin
-                    </span>
-                `;
-
-            }
-
-
-            return `
-                <span class="role-badge">
-                    ${esc(role.icon || "")}
-                    ${esc(role.name)}
-                </span>
-            `;
-
-        })
-        .join("");
-
-
-    userMini.innerHTML = `
-
+    let html = `
         <div class="user-mini">
 
             <strong>
-                ${esc(
-                    currentUser.display_name
-                )}
+                ${esc(user.display_name || user.username)}
             </strong>
-
-            <div class="user-roles">
-
-                ${
-                    roleBadges ||
-                    `<span class="muted">
-                        Aucun rôle
-                    </span>`
-                }
-
-            </div>
-
-        </div>
-
     `;
 
 
-    if (welcome) {
+    if (isAdmin) {
 
-        welcome.textContent =
-            `Bienvenue, ${currentUser.display_name}`;
-
-    }
-
-}
-
-
-// ============================================================
-// NAVIGATION SELON LES DROITS
-// ============================================================
-
-function applyNavigationPermissions() {
-
-    const adminItems =
-        document.querySelectorAll(
-            ".admin-only"
-        );
-
-
-    if (isAdmin()) {
-
-        adminItems.forEach(
-            item => {
-                item.style.display = "";
-            }
-        );
-
-        return;
+        html += `
+            <div class="user-role admin-role">
+                👑 Administrateur
+            </div>
+        `;
 
     }
 
 
-    adminItems.forEach(
-        item => {
-            item.style.display = "none";
-        }
+    const normalRoles = userRoles.filter(
+        role => role && !role.is_admin
     );
+
+
+    normalRoles.forEach(role => {
+
+        html += `
+            <div class="user-role">
+                ${esc(role.icon || "•")}
+                ${esc(role.name)}
+            </div>
+        `;
+
+    });
+
+
+    if (!isAdmin && normalRoles.length === 0) {
+
+        html += `
+            <div class="user-role">
+                Utilisateur
+            </div>
+        `;
+
+    }
+
+
+    html += `
+        </div>
+    `;
+
+
+    userMini.innerHTML = html;
 
 }
 
 
-// ============================================================
-// DECONNEXION
-// ============================================================
+renderUser();
 
-const logoutBtn =
-    document.querySelector(
-        "#logoutBtn"
-    );
 
+if (welcome) {
+
+    welcome.textContent =
+        `Bienvenue, ${user.display_name || user.username}`;
+
+}
+
+
+/* ============================================================
+   ADMINISTRATION
+============================================================ */
+
+if (!isAdmin) {
+
+    document
+        .querySelectorAll(".admin-only")
+        .forEach(element => {
+
+            element.style.display = "none";
+
+        });
+
+}
+
+
+/* ============================================================
+   DECONNEXION
+============================================================ */
 
 if (logoutBtn) {
 
     logoutBtn.onclick = async () => {
 
+        await supabase.auth.signOut();
+
         sessionStorage.removeItem(
             "msa_user"
         );
-
-        try {
-
-            await supabase.auth.signOut();
-
-        } catch (error) {
-
-            console.error(error);
-
-        }
 
         window.location.href =
             "login.html";
@@ -385,15 +172,9 @@ if (logoutBtn) {
 }
 
 
-// ============================================================
-// MENU MOBILE
-// ============================================================
-
-const mobileMenu =
-    document.querySelector(
-        "#mobileMenu"
-    );
-
+/* ============================================================
+   MENU MOBILE
+============================================================ */
 
 if (mobileMenu) {
 
@@ -408,63 +189,174 @@ if (mobileMenu) {
 }
 
 
-// ============================================================
-// NAVIGATION
-// ============================================================
+/* ============================================================
+   NAVIGATION
+============================================================ */
 
 document
     .querySelectorAll(".nav-item")
     .forEach(item => {
 
-        item.onclick = () => {
+        item.addEventListener(
+            "click",
+            () => {
 
-            document
-                .querySelectorAll(".nav-item")
-                .forEach(
-                    element =>
+                document
+                    .querySelectorAll(".nav-item")
+                    .forEach(element => {
+
                         element.classList.remove(
                             "active"
-                        )
+                        );
+
+                    });
+
+
+                item.classList.add(
+                    "active"
                 );
 
 
-            item.classList.add(
-                "active"
-            );
+                const page =
+                    item.dataset.page;
 
 
-            load(
-                item.dataset.page
-            );
+                loadPage(page);
 
 
-            document
-                .querySelector(".sidebar")
-                ?.classList.remove(
-                    "open"
-                );
+                document
+                    .querySelector(".sidebar")
+                    ?.classList.remove(
+                        "open"
+                    );
 
-        };
+            }
+        );
 
     });
 
 
-// ============================================================
-// CHARGEMENT DES PAGES
-// ============================================================
+/* ============================================================
+   TITRES
+============================================================ */
 
-async function load(page) {
+const pageTitles = {
 
-    const pageElement =
-        document.querySelector(
-            `[data-page="${page}"]`
-        );
+    dashboard:
+        "Tableau de bord",
 
+    mariages:
+        "Mariages",
+
+    noms:
+        "Changements de nom",
+
+    sanctions:
+        "Sanctions",
+
+    blacklist:
+        "Blacklist",
+
+    agenda:
+        "Agenda",
+
+    documents:
+        "Documents",
+
+    users:
+        "Comptes",
+
+    requests:
+        "Demandes de comptes",
+
+    permissions:
+        "Permissions"
+
+};
+
+
+/* ============================================================
+   MODULES
+============================================================ */
+
+const moduleMap = {
+
+    mariages: {
+
+        table:
+            "mariages",
+
+        label:
+            "Mariages"
+
+    },
+
+
+    noms: {
+
+        table:
+            "name_changes",
+
+        label:
+            "Changements de nom"
+
+    },
+
+
+    sanctions: {
+
+        table:
+            "sanctions",
+
+        label:
+            "Sanctions"
+
+    },
+
+
+    blacklist: {
+
+        table:
+            "blacklist",
+
+        label:
+            "Blacklist"
+
+    },
+
+
+    agenda: {
+
+        table:
+            "agenda",
+
+        label:
+            "Agenda"
+
+    },
+
+
+    documents: {
+
+        table:
+            "documents",
+
+        label:
+            "Documents"
+
+    }
+
+};
+
+
+/* ============================================================
+   CHARGEMENT PAGE
+============================================================ */
+
+async function loadPage(page) {
 
     title.textContent =
-        pageElement
-            ?.querySelector("span")
-            ?.textContent ||
+        pageTitles[page] ||
         "Tableau de bord";
 
 
@@ -477,84 +369,35 @@ async function load(page) {
 
     if (page === "users") {
 
-        return users();
+        return usersPage();
 
     }
 
 
     if (page === "requests") {
 
-        return requests();
-
-    }
-
-
-    if (page === "roles") {
-
-        return roles();
+        return requestsPage();
 
     }
 
 
     if (page === "permissions") {
 
-        return permissions();
+        return permissionsPage();
 
     }
 
 
-    return generic(page);
+    return modulePage(page);
 
 }
 
 
-// ============================================================
-// DASHBOARD
-// ============================================================
+/* ============================================================
+   DASHBOARD
+============================================================ */
 
 async function dashboard() {
-
-    const [
-        marriages,
-        sanctions,
-        blacklist,
-        documents
-    ] = await Promise.all([
-
-        supabase
-            .from("mariages")
-            .select("*", {
-                count: "exact",
-                head: true
-            }),
-
-        supabase
-            .from("sanctions")
-            .select("*", {
-                count: "exact",
-                head: true
-            }),
-
-        supabase
-            .from("blacklist")
-            .select("*", {
-                count: "exact",
-                head: true
-            })
-            .eq(
-                "active",
-                true
-            ),
-
-        supabase
-            .from("documents")
-            .select("*", {
-                count: "exact",
-                head: true
-            })
-
-    ]);
-
 
     content.innerHTML = `
 
@@ -562,30 +405,22 @@ async function dashboard() {
 
             <div class="stat-card">
                 <small>Mariages</small>
-                <strong>
-                    ${marriages.count ?? 0}
-                </strong>
+                <strong id="statMariages">—</strong>
             </div>
 
             <div class="stat-card">
                 <small>Sanctions</small>
-                <strong>
-                    ${sanctions.count ?? 0}
-                </strong>
+                <strong id="statSanctions">—</strong>
             </div>
 
             <div class="stat-card">
                 <small>Blacklist actives</small>
-                <strong>
-                    ${blacklist.count ?? 0}
-                </strong>
+                <strong id="statBlacklist">—</strong>
             </div>
 
             <div class="stat-card">
                 <small>Documents</small>
-                <strong>
-                    ${documents.count ?? 0}
-                </strong>
+                <strong id="statDocuments">—</strong>
             </div>
 
         </div>
@@ -600,7 +435,7 @@ async function dashboard() {
                 </h2>
 
                 <div
-                    id="recent"
+                    id="recentActivity"
                     class="empty"
                 >
                     Chargement…
@@ -616,7 +451,7 @@ async function dashboard() {
                 </h2>
 
                 <div
-                    id="events"
+                    id="upcomingEvents"
                     class="empty"
                 >
                     Chargement…
@@ -629,8 +464,70 @@ async function dashboard() {
     `;
 
 
+    const results =
+        await Promise.all([
+
+            supabase
+                .from("mariages")
+                .select("*", {
+                    count: "exact",
+                    head: true
+                }),
+
+            supabase
+                .from("sanctions")
+                .select("*", {
+                    count: "exact",
+                    head: true
+                }),
+
+            supabase
+                .from("blacklist")
+                .select("*", {
+                    count: "exact",
+                    head: true
+                })
+                .eq(
+                    "active",
+                    true
+                ),
+
+            supabase
+                .from("documents")
+                .select("*", {
+                    count: "exact",
+                    head: true
+                })
+
+        ]);
+
+
+    document.querySelector(
+        "#statMariages"
+    ).textContent =
+        results[0].count ?? 0;
+
+
+    document.querySelector(
+        "#statSanctions"
+    ).textContent =
+        results[1].count ?? 0;
+
+
+    document.querySelector(
+        "#statBlacklist"
+    ).textContent =
+        results[2].count ?? 0;
+
+
+    document.querySelector(
+        "#statDocuments"
+    ).textContent =
+        results[3].count ?? 0;
+
+
     const {
-        data: logs
+        data: activity
     } = await supabase
         .from("audit_logs")
         .select("*")
@@ -645,42 +542,42 @@ async function dashboard() {
 
     const recent =
         document.querySelector(
-            "#recent"
+            "#recentActivity"
         );
 
 
-    if (recent) {
+    if (
+        activity &&
+        activity.length
+    ) {
 
         recent.innerHTML =
-            logs?.length
+            activity
+                .map(item => `
 
-                ? logs
-                    .map(log => `
+                    <div class="event">
 
-                        <div class="event">
+                        <b>
+                            ${esc(item.action)}
+                        </b>
 
-                            <b>
-                                ${esc(
-                                    log.action
-                                )}
-                            </b>
+                        <small>
+                            ${new Date(
+                                item.created_at
+                            ).toLocaleString(
+                                "fr-FR"
+                            )}
+                        </small>
 
-                            <small>
-                                ${
-                                    new Date(
-                                        log.created_at
-                                    ).toLocaleString(
-                                        "fr-FR"
-                                    )
-                                }
-                            </small>
+                    </div>
 
-                        </div>
+                `)
+                .join("");
 
-                    `)
-                    .join("")
+    } else {
 
-                : "Aucune activité.";
+        recent.textContent =
+            "Aucune activité récente.";
 
     }
 
@@ -695,108 +592,128 @@ async function dashboard() {
             new Date().toISOString()
         )
         .order(
-            "event_date"
+            "event_date",
+            {
+                ascending: true
+            }
         )
         .limit(5);
 
 
-    const eventsElement =
+    const upcoming =
         document.querySelector(
-            "#events"
+            "#upcomingEvents"
         );
 
 
-    if (eventsElement) {
+    if (
+        events &&
+        events.length
+    ) {
 
-        eventsElement.innerHTML =
-            events?.length
+        upcoming.innerHTML =
+            events
+                .map(event => `
 
-                ? events
-                    .map(event => `
+                    <div class="event">
 
-                        <div class="event">
+                        <b>
+                            ${esc(event.title)}
+                        </b>
 
-                            <b>
-                                ${esc(
-                                    event.title
-                                )}
-                            </b>
+                        <small>
+                            ${new Date(
+                                event.event_date
+                            ).toLocaleString(
+                                "fr-FR"
+                            )}
+                        </small>
 
-                            <small>
-                                ${
-                                    new Date(
-                                        event.event_date
-                                    ).toLocaleString(
-                                        "fr-FR"
-                                    )
-                                }
-                            </small>
+                    </div>
 
-                        </div>
+                `)
+                .join("");
 
-                    `)
-                    .join("")
+    } else {
 
-                : "Aucun événement.";
+        upcoming.textContent =
+            "Aucun événement à venir.";
 
     }
 
 }
 
 
-// ============================================================
-// PAGES DE DONNEES
-// ============================================================
+/* ============================================================
+   VERIFICATION PERMISSION
+============================================================ */
 
-async function generic(page) {
+async function hasPermission(
+    permission,
+    module
+) {
 
-    const map = {
+    if (isAdmin) {
 
-        mariages: [
-            "Mariages",
-            "mariages"
-        ],
+        return true;
 
-        noms: [
-            "Changements de nom",
-            "name_changes"
-        ],
-
-        sanctions: [
-            "Sanctions",
-            "sanctions"
-        ],
-
-        blacklist: [
-            "Blacklist",
-            "blacklist"
-        ],
-
-        agenda: [
-            "Agenda",
-            "agenda"
-        ],
-
-        documents: [
-            "Documents",
-            "documents"
-        ]
-
-    };
+    }
 
 
-    const config =
-        map[page];
+    const {
+        data,
+        error
+    } = await supabase.rpc(
+        "has_permission",
+        {
+            p_permission:
+                permission,
+
+            p_module:
+                module
+        }
+    );
 
 
-    if (!config) {
+    if (error) {
+
+        console.error(
+            "Erreur permission:",
+            error
+        );
+
+        return false;
+
+    }
+
+
+    return Boolean(data);
+
+}
+
+
+/* ============================================================
+   PAGE MODULE
+============================================================ */
+
+async function modulePage(page) {
+
+    const module =
+        moduleMap[page];
+
+
+    if (!module) {
 
         content.innerHTML = `
+
             <div class="panel">
-                <div class="empty">
-                    Page introuvable.
-                </div>
+
+                <h2>
+                    Page introuvable
+                </h2>
+
             </div>
+
         `;
 
         return;
@@ -804,20 +721,48 @@ async function generic(page) {
     }
 
 
-    const [
-        label,
-        table
-    ] = config;
+    const canView =
+        await hasPermission(
+            "view",
+            page
+        );
+
+
+    if (!canView) {
+
+        content.innerHTML = `
+
+            <div class="panel">
+
+                <h2>
+                    Accès refusé
+                </h2>
+
+                <p>
+                    Vous n'avez pas la permission
+                    de consulter cette section.
+                </p>
+
+            </div>
+
+        `;
+
+        return;
+
+    }
 
 
     const {
         data,
         error
     } = await supabase
-        .from(table)
+        .from(module.table)
         .select(`
             *,
             creator:created_by (
+                display_name
+            ),
+            updater:updated_by (
                 display_name
             )
         `)
@@ -832,18 +777,19 @@ async function generic(page) {
 
     if (error) {
 
+        console.error(error);
+
         content.innerHTML = `
 
             <div class="panel">
 
-                <div class="empty">
+                <h2>
+                    Erreur
+                </h2>
 
-                    Erreur :
-                    ${esc(
-                        error.message
-                    )}
-
-                </div>
+                <p>
+                    ${esc(error.message)}
+                </p>
 
             </div>
 
@@ -854,16 +800,23 @@ async function generic(page) {
     }
 
 
+    const canAdd =
+        await hasPermission(
+            "add",
+            page
+        );
+
+
     content.innerHTML = `
 
         <div class="page-intro">
 
             <h2>
-                ${label}
+                ${module.label}
             </h2>
 
             <p class="muted">
-                Données partagées de la Mairie.
+                Données partagées de la Mairie de San Andreas.
             </p>
 
         </div>
@@ -871,32 +824,22 @@ async function generic(page) {
 
         <div class="toolbar">
 
-            <div class="toolbar-left">
-
-                <input
-                    class="search"
-                    id="search"
-                    placeholder="Rechercher…"
-                >
-
-            </div>
-
+            <input
+                class="search"
+                id="moduleSearch"
+                placeholder="Rechercher…"
+            >
 
             ${
-                hasPermission(
-                    "add",
-                    table
-                )
-
+                canAdd
                     ? `
                         <button
                             class="primary-btn"
-                            id="add"
+                            id="addModule"
                         >
                             + Ajouter
                         </button>
                     `
-
                     : ""
             }
 
@@ -920,7 +863,7 @@ async function generic(page) {
                         </th>
 
                         <th>
-                            Créé le
+                            Date
                         </th>
 
                         <th>
@@ -932,7 +875,9 @@ async function generic(page) {
                 </thead>
 
 
-                <tbody id="rows"></tbody>
+                <tbody
+                    id="moduleRows"
+                ></tbody>
 
             </table>
 
@@ -941,93 +886,86 @@ async function generic(page) {
     `;
 
 
-    renderRows(
+    await renderModuleRows(
         data || [],
-        table
+        module,
+        page
     );
 
 
-    const addButton =
+    if (canAdd) {
+
         document.querySelector(
-            "#add"
-        );
+            "#addModule"
+        ).onclick = () => {
 
+            openAddModal(
+                module,
+                page
+            );
 
-    if (addButton) {
-
-        addButton.onclick =
-            () =>
-                openAdd(
-                    table,
-                    label
-                );
+        };
 
     }
 
 
-    const search =
-        document.querySelector(
-            "#search"
-        );
+    document.querySelector(
+        "#moduleSearch"
+    ).oninput = async event => {
+
+        const search =
+            event.target.value
+                .toLowerCase();
 
 
-    if (search) {
+        const filtered =
+            (data || [])
+                .filter(item =>
 
-        search.oninput =
-            event => {
-
-                const value =
-                    event.target.value
-                        .toLowerCase();
-
-
-                renderRows(
-
-                    (data || [])
-                        .filter(item =>
-                            JSON.stringify(
-                                item
-                            )
-                            .toLowerCase()
-                            .includes(
-                                value
-                            )
-                        ),
-
-                    table
+                    JSON.stringify(item)
+                        .toLowerCase()
+                        .includes(search)
 
                 );
 
-            };
 
-    }
+        await renderModuleRows(
+            filtered,
+            module,
+            page
+        );
+
+    };
 
 }
 
 
-// ============================================================
-// AFFICHER LES LIGNES
-// ============================================================
+/* ============================================================
+   RENDU DES LIGNES
+============================================================ */
 
-function renderRows(
+async function renderModuleRows(
     rows,
-    table
+    module,
+    page
 ) {
 
-    const rowsElement =
+    const tbody =
         document.querySelector(
-            "#rows"
+            "#moduleRows"
         );
 
 
-    if (!rowsElement) {
+    if (!tbody) {
+
         return;
+
     }
 
 
     if (!rows.length) {
 
-        rowsElement.innerHTML = `
+        tbody.innerHTML = `
 
             <tr>
 
@@ -1050,43 +988,66 @@ function renderRows(
     }
 
 
-    rowsElement.innerHTML =
+    tbody.innerHTML =
         rows
             .map(item => {
 
-                const own =
+                const creator =
+                    item.creator?.display_name ||
+                    "Utilisateur inconnu";
+
+
+                const isOwner =
                     item.created_by ===
                     user.id;
 
 
-                const canEdit =
-                    isAdmin() ||
-                    hasPermission(
-                        "edit",
-                        table
-                    ) ||
-                    (
-                        own &&
-                        hasPermission(
-                            "edit_own",
-                            table
-                        )
-                    );
+                let actions = "";
 
 
-                const canDelete =
-                    isAdmin() ||
-                    hasPermission(
-                        "delete",
-                        table
-                    ) ||
-                    (
-                        own &&
-                        hasPermission(
-                            "delete_own",
-                            table
-                        )
-                    );
+                if (isAdmin) {
+
+                    actions = `
+
+                        <button
+                            class="secondary-btn"
+                            data-edit-id="${item.id}"
+                        >
+                            Modifier
+                        </button>
+
+                        <button
+                            class="danger-btn"
+                            data-delete-id="${item.id}"
+                        >
+                            Supprimer
+                        </button>
+
+                    `;
+
+                } else {
+
+                    actions = `
+
+                        <button
+                            class="secondary-btn"
+                            data-edit-id="${item.id}"
+                            style="display:none"
+                        >
+                            Modifier
+                        </button>
+
+                        <button
+                            class="danger-btn"
+                            data-delete-id="${item.id}"
+                            style="display:none"
+                        >
+                            Supprimer
+                        </button>
+
+                    `;
+
+                }
 
 
                 return `
@@ -1096,34 +1057,26 @@ function renderRows(
                         <td>
 
                             <strong>
-                                ${esc(
-                                    item.title
-                                )}
+                                ${esc(item.title)}
                             </strong>
 
                             <br>
 
-                            <span class="muted">
-
+                            <small>
                                 ${esc(
                                     item.details ||
-                                    "Aucun détail"
+                                    ""
                                 )}
-
-                            </span>
+                            </small>
 
                         </td>
 
 
                         <td>
 
-                            ${
-                                esc(
-                                    item.creator
-                                        ?.display_name ||
-                                    "Utilisateur inconnu"
-                                )
-                            }
+                            ${esc(
+                                creator
+                            )}
 
                         </td>
 
@@ -1132,13 +1085,11 @@ function renderRows(
 
                             ${
                                 item.created_at
-
                                     ? new Date(
                                         item.created_at
                                     ).toLocaleDateString(
                                         "fr-FR"
                                     )
-
                                     : "—"
                             }
 
@@ -1149,54 +1100,7 @@ function renderRows(
 
                             <div class="actions">
 
-                                ${
-                                    canEdit
-
-                                        ? `
-
-                                            <button
-                                                class="secondary-btn"
-                                                data-edit="${item.id}"
-                                            >
-                                                Modifier
-                                            </button>
-
-                                        `
-
-                                        : ""
-                                }
-
-
-                                ${
-                                    canDelete
-
-                                        ? `
-
-                                            <button
-                                                class="danger-btn"
-                                                data-delete="${item.id}"
-                                            >
-                                                Supprimer
-                                            </button>
-
-                                        `
-
-                                        : ""
-                                }
-
-
-                                ${
-                                    !canEdit &&
-                                    !canDelete
-
-                                        ? `
-                                            <span class="muted">
-                                                Lecture seule
-                                            </span>
-                                          `
-
-                                        : ""
-                                }
+                                ${actions}
 
                             </div>
 
@@ -1210,47 +1114,182 @@ function renderRows(
             .join("");
 
 
-    document
-        .querySelectorAll(
-            "[data-delete]"
-        )
-        .forEach(button => {
-
-            button.onclick =
-                () =>
-                    deleteItem(
-                        table,
-                        button.dataset.delete
-                    );
-
-        });
+    const editButtons =
+        tbody.querySelectorAll(
+            "[data-edit-id]"
+        );
 
 
-    document
-        .querySelectorAll(
-            "[data-edit]"
-        )
-        .forEach(button => {
+    for (
+        const button of editButtons
+    ) {
 
-            button.onclick =
-                () =>
-                    editItem(
-                        table,
-                        button.dataset.edit
-                    );
+        const item =
+            rows.find(
+                row =>
+                    row.id ===
+                    button.dataset.editId
+            );
 
-        });
+
+        if (!item) {
+            continue;
+        }
+
+
+        const canEdit =
+            isAdmin ||
+            await hasPermission(
+                "edit",
+                page
+            ) ||
+            (
+                isOwnerOf(item) &&
+                await hasPermission(
+                    "edit_own",
+                    page
+                )
+            );
+
+
+        if (!canEdit) {
+
+            button.style.display =
+                "none";
+
+            continue;
+
+        }
+
+
+        button.onclick = () => {
+
+            openEditModal(
+                module,
+                page,
+                item
+            );
+
+        };
+
+    }
+
+
+    const deleteButtons =
+        tbody.querySelectorAll(
+            "[data-delete-id]"
+        );
+
+
+    for (
+        const button of deleteButtons
+    ) {
+
+        const item =
+            rows.find(
+                row =>
+                    row.id ===
+                    button.dataset.deleteId
+            );
+
+
+        if (!item) {
+            continue;
+        }
+
+
+        const canDelete =
+            isAdmin ||
+            await hasPermission(
+                "delete",
+                page
+            ) ||
+            (
+                isOwnerOf(item) &&
+                await hasPermission(
+                    "delete_own",
+                    page
+                )
+            );
+
+
+        if (!canDelete) {
+
+            button.style.display =
+                "none";
+
+            continue;
+
+        }
+
+
+        button.onclick = async () => {
+
+            if (
+                !confirm(
+                    "Supprimer cet élément ?"
+                )
+            ) {
+
+                return;
+
+            }
+
+
+            const {
+                error
+            } = await supabase
+                .from(module.table)
+                .delete()
+                .eq(
+                    "id",
+                    button.dataset.deleteId
+                );
+
+
+            if (error) {
+
+                alert(
+                    error.message
+                );
+
+                return;
+
+            }
+
+
+            await modulePage(
+                page
+            );
+
+        };
+
+    }
 
 }
 
 
-// ============================================================
-// AJOUTER UN ELEMENT
-// ============================================================
+/* ============================================================
+   PROPRIETAIRE
+============================================================ */
 
-function openAdd(
-    table,
-    label
+function isOwnerOf(item) {
+
+    return (
+        item.created_by ===
+        user.id
+    );
+
+}
+
+
+/* ============================================================
+   AJOUT
+============================================================ */
+
+function openAddModal(
+    module,
+    page
 ) {
 
     modalRoot.innerHTML = `
@@ -1262,7 +1301,7 @@ function openAdd(
                 <div class="modal-head">
 
                     <h2>
-                        Ajouter — ${esc(label)}
+                        Ajouter — ${module.label}
                     </h2>
 
                     <button
@@ -1275,14 +1314,16 @@ function openAdd(
                 </div>
 
 
-                <form id="addForm">
+                <form
+                    id="addModuleForm"
+                >
 
                     <label>
 
                         Titre / Nom
 
                         <input
-                            id="addTitle"
+                            id="moduleTitle"
                             required
                         >
 
@@ -1294,7 +1335,7 @@ function openAdd(
                         Détails
 
                         <textarea
-                            id="addDetails"
+                            id="moduleDetails"
                             rows="5"
                         ></textarea>
 
@@ -1302,8 +1343,7 @@ function openAdd(
 
 
                     ${
-                        table === "agenda"
-
+                        module.table === "agenda"
                             ? `
 
                                 <label>
@@ -1319,7 +1359,6 @@ function openAdd(
                                 </label>
 
                             `
-
                             : ""
                     }
 
@@ -1341,136 +1380,97 @@ function openAdd(
 
 
     modalRoot
-        .querySelector(
-            ".close"
-        )
-        .onclick =
-            () =>
-                modalRoot.innerHTML = "";
+        .querySelector(".close")
+        .onclick = () => {
+
+            modalRoot.innerHTML =
+                "";
+
+        };
 
 
-    modalRoot
-        .querySelector(
-            "#addForm"
-        )
-        .onsubmit =
-            async event => {
+    document.querySelector(
+        "#addModuleForm"
+    ).onsubmit = async event => {
 
-                event.preventDefault();
+        event.preventDefault();
 
 
-                const payload = {
+        const payload = {
 
-                    title:
-                        document.querySelector(
-                            "#addTitle"
-                        ).value
-                        .trim(),
+            title:
+                document.querySelector(
+                    "#moduleTitle"
+                ).value.trim(),
 
-                    details:
-                        document.querySelector(
-                            "#addDetails"
-                        ).value
-                        .trim(),
+            details:
+                document.querySelector(
+                    "#moduleDetails"
+                ).value.trim(),
 
-                    created_by:
-                        user.id
+            created_by:
+                user.id
 
-                };
+        };
 
 
-                if (
-                    table ===
-                    "agenda"
-                ) {
+        if (
+            module.table ===
+            "agenda"
+        ) {
 
-                    payload.event_date =
-                        new Date(
-                            document.querySelector(
-                                "#eventDate"
-                            ).value
-                        ).toISOString();
+            payload.event_date =
+                new Date(
+                    document.querySelector(
+                        "#eventDate"
+                    ).value
+                ).toISOString();
 
-                }
-
-
-                const {
-                    error
-                } = await supabase
-                    .from(table)
-                    .insert(
-                        payload
-                    );
+        }
 
 
-                if (error) {
-
-                    alert(
-                        error.message
-                    );
-
-                    return;
-
-                }
+        const {
+            error
+        } = await supabase
+            .from(module.table)
+            .insert(
+                payload
+            );
 
 
-                modalRoot.innerHTML =
-                    "";
+        if (error) {
+
+            alert(
+                error.message
+            );
+
+            return;
+
+        }
 
 
-                generic(
-                    Object.keys({
-                        mariages: 1,
-                        name_changes: 1,
-                        sanctions: 1,
-                        blacklist: 1,
-                        agenda: 1,
-                        documents: 1
-                    })
-                    .find(
-                        key =>
-                            key === table
-                    ) || table
-                );
+        modalRoot.innerHTML =
+            "";
 
-            };
+
+        await modulePage(
+            page
+        );
+
+    };
 
 }
 
 
-// ============================================================
-// MODIFIER
-// ============================================================
+/* ============================================================
+   MODIFICATION
+============================================================ */
 
-async function editItem(
-    table,
-    id
+function openEditModal(
+    module,
+    page,
+    item
 ) {
-
-    const {
-        data: item,
-        error
-    } = await supabase
-        .from(table)
-        .select("*")
-        .eq(
-            "id",
-            id
-        )
-        .single();
-
-
-    if (error || !item) {
-
-        alert(
-            error?.message ||
-            "Élément introuvable."
-        );
-
-        return;
-
-    }
-
 
     modalRoot.innerHTML = `
 
@@ -1481,7 +1481,7 @@ async function editItem(
                 <div class="modal-head">
 
                     <h2>
-                        Modifier
+                        Modifier — ${module.label}
                     </h2>
 
                     <button
@@ -1494,7 +1494,9 @@ async function editItem(
                 </div>
 
 
-                <form id="editForm">
+                <form
+                    id="editModuleForm"
+                >
 
                     <label>
 
@@ -1502,9 +1504,7 @@ async function editItem(
 
                         <input
                             id="editTitle"
-                            value="${esc(
-                                item.title
-                            )}"
+                            value="${esc(item.title)}"
                             required
                         >
 
@@ -1526,11 +1526,43 @@ async function editItem(
                     </label>
 
 
+                    ${
+                        module.table === "agenda"
+                            ? `
+
+                                <label>
+
+                                    Date de l'événement
+
+                                    <input
+                                        id="editEventDate"
+                                        type="datetime-local"
+                                        value="${
+                                            item.event_date
+                                                ? new Date(
+                                                    item.event_date
+                                                )
+                                                    .toISOString()
+                                                    .slice(
+                                                        0,
+                                                        16
+                                                    )
+                                                : ""
+                                        }"
+                                    >
+
+                                </label>
+
+                            `
+                            : ""
+                    }
+
+
                     <button
                         class="primary-btn"
                         type="submit"
                     >
-                        Enregistrer
+                        Enregistrer les modifications
                     </button>
 
                 </form>
@@ -1543,418 +1575,112 @@ async function editItem(
 
 
     modalRoot
-        .querySelector(
-            ".close"
-        )
-        .onclick =
-            () =>
-                modalRoot.innerHTML = "";
+        .querySelector(".close")
+        .onclick = () => {
+
+            modalRoot.innerHTML =
+                "";
+
+        };
 
 
-    modalRoot
-        .querySelector(
-            "#editForm"
-        )
-        .onsubmit =
-            async event => {
+    document.querySelector(
+        "#editModuleForm"
+    ).onsubmit = async event => {
 
-                event.preventDefault();
+        event.preventDefault();
 
 
-                const {
-                    error
-                } = await supabase
-                    .from(table)
-                    .update({
+        const payload = {
 
-                        title:
-                            document.querySelector(
-                                "#editTitle"
-                            ).value
-                            .trim(),
+            title:
+                document.querySelector(
+                    "#editTitle"
+                ).value.trim(),
 
-                        details:
-                            document.querySelector(
-                                "#editDetails"
-                            ).value
-                            .trim(),
+            details:
+                document.querySelector(
+                    "#editDetails"
+                ).value.trim()
 
-                        updated_by:
-                            user.id,
-
-                        updated_at:
-                            new Date()
-                                .toISOString()
-
-                    })
-                    .eq(
-                        "id",
-                        id
-                    );
+        };
 
 
-                if (error) {
+        if (
+            module.table ===
+            "agenda"
+        ) {
 
-                    alert(
-                        error.message
-                    );
-
-                    return;
-
-                }
-
-
-                modalRoot.innerHTML =
-                    "";
+            const date =
+                document.querySelector(
+                    "#editEventDate"
+                ).value;
 
 
-                location.reload();
+            if (date) {
 
-            };
+                payload.event_date =
+                    new Date(
+                        date
+                    ).toISOString();
 
-}
-
-
-// ============================================================
-// SUPPRIMER
-// ============================================================
-
-async function deleteItem(
-    table,
-    id
-) {
-
-    if (
-        !confirm(
-            "Voulez-vous vraiment supprimer cet élément ?"
-        )
-    ) {
-
-        return;
-
-    }
-
-
-    const {
-        error
-    } = await supabase
-        .from(table)
-        .delete()
-        .eq(
-            "id",
-            id
-        );
-
-
-    if (error) {
-
-        alert(
-            error.message
-        );
-
-        return;
-
-    }
-
-
-    load(
-        document.querySelector(
-            ".nav-item.active"
-        )?.dataset.page ||
-        "dashboard"
-    );
-
-}
-
-
-// ============================================================
-// DEMANDES DE COMPTES
-// ============================================================
-
-async function requests() {
-
-    if (!isAdmin()) {
-
-        content.innerHTML = `
-
-            <div class="panel">
-
-                <div class="empty">
-
-                    Accès réservé aux administrateurs.
-
-                </div>
-
-            </div>
-
-        `;
-
-        return;
-
-    }
-
-
-    const {
-        data,
-        error
-    } = await supabase
-        .from("account_requests")
-        .select("*")
-        .order(
-            "created_at",
-            {
-                ascending: false
             }
+
+        }
+
+
+        const {
+            error
+        } = await supabase
+            .from(module.table)
+            .update(
+                payload
+            )
+            .eq(
+                "id",
+                item.id
+            );
+
+
+        if (error) {
+
+            alert(
+                error.message
+            );
+
+            return;
+
+        }
+
+
+        modalRoot.innerHTML =
+            "";
+
+
+        await modulePage(
+            page
         );
 
+    };
 
-    if (error) {
+}
+
+
+/* ============================================================
+   COMPTES
+============================================================ */
+
+async function usersPage() {
+
+    if (!isAdmin) {
 
         content.innerHTML = `
 
             <div class="panel">
 
-                <div class="empty">
-
-                    ${esc(
-                        error.message
-                    )}
-
-                </div>
-
-            </div>
-
-        `;
-
-        return;
-
-    }
-
-
-    content.innerHTML = `
-
-        <div class="page-intro">
-
-            <h2>
-                Demandes de comptes
-            </h2>
-
-            <p class="muted">
-                Gérez les demandes d'accès à la Mairie.
-            </p>
-
-        </div>
-
-
-        <div class="panel table-wrap">
-
-            <table class="table">
-
-                <thead>
-
-                    <tr>
-
-                        <th>
-                            Identifiant
-                        </th>
-
-                        <th>
-                            Nom
-                        </th>
-
-                        <th>
-                            Motif
-                        </th>
-
-                        <th>
-                            Statut
-                        </th>
-
-                        <th>
-                            Actions
-                        </th>
-
-                    </tr>
-
-                </thead>
-
-
-                <tbody>
-
-                    ${
-                        (data || [])
-                            .map(request => `
-
-                                <tr>
-
-                                    <td>
-                                        ${esc(
-                                            request.username
-                                        )}
-                                    </td>
-
-                                    <td>
-                                        ${esc(
-                                            request.first_name
-                                        )}
-                                        ${esc(
-                                            request.last_name
-                                        )}
-                                    </td>
-
-                                    <td>
-                                        ${esc(
-                                            request.reason ||
-                                            "—"
-                                        )}
-                                    </td>
-
-                                    <td>
-                                        ${esc(
-                                            request.status
-                                        )}
-                                    </td>
-
-                                    <td>
-
-                                        ${
-                                            request.status ===
-                                            "pending"
-
-                                                ? `
-
-                                                    <button
-                                                        class="primary-btn"
-                                                        data-approve="${request.id}"
-                                                    >
-                                                        Accepter
-                                                    </button>
-
-                                                    <button
-                                                        class="danger-btn"
-                                                        data-reject="${request.id}"
-                                                    >
-                                                        Refuser
-                                                    </button>
-
-                                                `
-
-                                                : "—"
-                                        }
-
-                                    </td>
-
-                                </tr>
-
-                            `)
-                            .join("")
-                    }
-
-                </tbody>
-
-            </table>
-
-        </div>
-
-    `;
-
-
-    document
-        .querySelectorAll(
-            "[data-approve]"
-        )
-        .forEach(button => {
-
-            button.onclick =
-                () =>
-                    decideRequest(
-                        button.dataset.approve,
-                        "approved"
-                    );
-
-        });
-
-
-    document
-        .querySelectorAll(
-            "[data-reject]"
-        )
-        .forEach(button => {
-
-            button.onclick =
-                () =>
-                    decideRequest(
-                        button.dataset.reject,
-                        "rejected"
-                    );
-
-        });
-
-}
-
-
-// ============================================================
-// TRAITER UNE DEMANDE
-// ============================================================
-
-async function decideRequest(
-    id,
-    status
-) {
-
-    const {
-        error
-    } = await supabase
-        .from("account_requests")
-        .update({
-
-            status,
-
-            reviewed_by:
-                user.id,
-
-            reviewed_at:
-                new Date()
-                    .toISOString()
-
-        })
-        .eq(
-            "id",
-            id
-        );
-
-
-    if (error) {
-
-        alert(
-            error.message
-        );
-
-        return;
-
-    }
-
-
-    requests();
-
-}
-
-
-// ============================================================
-// GESTION DES COMPTES
-// ============================================================
-
-async function users() {
-
-    if (!isAdmin()) {
-
-        content.innerHTML = `
-
-            <div class="panel">
-
-                <div class="empty">
-                    Accès réservé aux administrateurs.
-                </div>
+                <h2>
+                    Accès refusé
+                </h2>
 
             </div>
 
@@ -1999,13 +1725,9 @@ async function users() {
 
             <div class="panel">
 
-                <div class="empty">
-
-                    ${esc(
-                        error.message
-                    )}
-
-                </div>
+                ${esc(
+                    error.message
+                )}
 
             </div>
 
@@ -2025,7 +1747,7 @@ async function users() {
             </h2>
 
             <p class="muted">
-                Gérez les comptes et leurs rôles.
+                Gestion des comptes utilisateurs.
             </p>
 
         </div>
@@ -2044,19 +1766,11 @@ async function users() {
                         </th>
 
                         <th>
-                            Identifiant
-                        </th>
-
-                        <th>
                             Rôles
                         </th>
 
                         <th>
                             Statut
-                        </th>
-
-                        <th>
-                            Actions
                         </th>
 
                     </tr>
@@ -2071,50 +1785,79 @@ async function users() {
                             .map(profile => {
 
                                 const roles =
-                                    (profile.user_roles || [])
+                                    (
+                                        profile.user_roles ||
+                                        []
+                                    )
                                         .map(
-                                            row =>
-                                                row.roles
+                                            relation =>
+                                                relation.roles
                                         )
                                         .filter(Boolean);
 
 
-                                const roleHTML =
-                                    roles
-                                        .map(role => {
-
-                                            if (
-                                                role.is_admin
-                                            ) {
-
-                                                return `
-                                                    <span class="role-badge admin-role">
-                                                        👑 Admin
-                                                    </span>
-                                                `;
-
-                                            }
+                                const admin =
+                                    roles.find(
+                                        role =>
+                                            role.is_admin
+                                    );
 
 
-                                            return `
+                                const normalRoles =
+                                    roles.filter(
+                                        role =>
+                                            !role.is_admin
+                                    );
 
-                                                <span class="role-badge">
 
-                                                    ${esc(
-                                                        role.icon ||
-                                                        ""
-                                                    )}
+                                let roleHtml =
+                                    "";
 
-                                                    ${esc(
-                                                        role.name
-                                                    )}
 
-                                                </span>
+                                if (admin) {
 
-                                            `;
+                                    roleHtml += `
+                                        👑 Administrateur
+                                    `;
 
-                                        })
-                                        .join("");
+                                }
+
+
+                                if (
+                                    normalRoles.length
+                                ) {
+
+                                    if (
+                                        roleHtml
+                                    ) {
+
+                                        roleHtml +=
+                                            " • ";
+
+                                    }
+
+
+                                    roleHtml +=
+                                        normalRoles
+                                            .map(
+                                                role =>
+                                                    `${esc(role.icon || "•")} ${esc(role.name)}`
+                                            )
+                                            .join(
+                                                " • "
+                                            );
+
+                                }
+
+
+                                if (
+                                    !roleHtml
+                                ) {
+
+                                    roleHtml =
+                                        "Aucun rôle";
+
+                                }
 
 
                                 return `
@@ -2129,24 +1872,20 @@ async function users() {
                                                 )}
                                             </strong>
 
+                                            <br>
+
+                                            <small>
+                                                ${esc(
+                                                    profile.username
+                                                )}
+                                            </small>
+
                                         </td>
 
 
                                         <td>
 
-                                            ${esc(
-                                                profile.username
-                                            )}
-
-                                        </td>
-
-
-                                        <td>
-
-                                            ${
-                                                roleHTML ||
-                                                "Aucun rôle"
-                                            }
+                                            ${roleHtml}
 
                                         </td>
 
@@ -2155,21 +1894,9 @@ async function users() {
 
                                             ${
                                                 profile.active
-                                                    ? "Actif"
-                                                    : "Désactivé"
+                                                    ? "🟢 Actif"
+                                                    : "🔴 Désactivé"
                                             }
-
-                                        </td>
-
-
-                                        <td>
-
-                                            <button
-                                                class="secondary-btn"
-                                                data-manage-user="${profile.id}"
-                                            >
-                                                Gérer
-                                            </button>
 
                                         </td>
 
@@ -2189,246 +1916,24 @@ async function users() {
 
     `;
 
-
-    document
-        .querySelectorAll(
-            "[data-manage-user]"
-        )
-        .forEach(button => {
-
-            button.onclick =
-                () =>
-                    manageUser(
-                        button.dataset.manageUser
-                    );
-
-        });
-
 }
 
 
-// ============================================================
-// GERER UN UTILISATEUR
-// ============================================================
+/* ============================================================
+   DEMANDES DE COMPTES
+============================================================ */
 
-async function manageUser(
-    userId
-) {
+async function requestsPage() {
 
-    const {
-        data: profile
-    } = await supabase
-        .from("profiles")
-        .select("*")
-        .eq(
-            "id",
-            userId
-        )
-        .single();
-
-
-    const {
-        data: roles
-    } = await supabase
-        .from("roles")
-        .select("*")
-        .order(
-            "name"
-        );
-
-
-    const {
-        data: assigned
-    } = await supabase
-        .from("user_roles")
-        .select("role_id")
-        .eq(
-            "user_id",
-            userId
-        );
-
-
-    const assignedIds =
-        (assigned || [])
-            .map(
-                item =>
-                    item.role_id
-            );
-
-
-    modalRoot.innerHTML = `
-
-        <div class="modal-backdrop">
-
-            <div class="modal">
-
-                <div class="modal-head">
-
-                    <h2>
-                        Gérer les rôles
-                    </h2>
-
-                    <button
-                        class="close"
-                        type="button"
-                    >
-                        ×
-                    </button>
-
-                </div>
-
-
-                <p>
-
-                    <strong>
-                        ${esc(
-                            profile.display_name
-                        )}
-                    </strong>
-
-                </p>
-
-
-                <form id="rolesForm">
-
-                    ${
-                        (roles || [])
-                            .map(role => `
-
-                                <label>
-
-                                    <input
-                                        type="checkbox"
-                                        value="${role.id}"
-                                        ${
-                                            assignedIds.includes(
-                                                role.id
-                                            )
-                                                ? "checked"
-                                                : ""
-                                        }
-                                    >
-
-                                    ${esc(
-                                        role.icon ||
-                                        ""
-                                    )}
-
-                                    ${esc(
-                                        role.name
-                                    )}
-
-                                </label>
-
-                            `)
-                            .join("")
-                    }
-
-
-                    <button
-                        class="primary-btn"
-                        type="submit"
-                    >
-                        Enregistrer
-                    </button>
-
-                </form>
-
-            </div>
-
-        </div>
-
-    `;
-
-
-    modalRoot
-        .querySelector(
-            ".close"
-        )
-        .onclick =
-            () =>
-                modalRoot.innerHTML = "";
-
-
-    modalRoot
-        .querySelector(
-            "#rolesForm"
-        )
-        .onsubmit =
-            async event => {
-
-                event.preventDefault();
-
-
-                const selected =
-                    Array.from(
-                        modalRoot
-                            .querySelectorAll(
-                                "input[type=checkbox]:checked"
-                            )
-                    )
-                    .map(
-                        input =>
-                            input.value
-                    );
-
-
-                await supabase
-                    .from("user_roles")
-                    .delete()
-                    .eq(
-                        "user_id",
-                        userId
-                    );
-
-
-                if (selected.length) {
-
-                    await supabase
-                        .from("user_roles")
-                        .insert(
-
-                            selected.map(
-                                roleId => ({
-                                    user_id:
-                                        userId,
-
-                                    role_id:
-                                        roleId
-                                })
-                            )
-
-                        );
-
-                }
-
-
-                modalRoot.innerHTML =
-                    "";
-
-
-                users();
-
-            };
-
-}
-
-
-// ============================================================
-// GESTION DES ROLES
-// ============================================================
-
-async function roles() {
-
-    if (!isAdmin()) {
+    if (!isAdmin) {
 
         content.innerHTML = `
 
             <div class="panel">
 
-                <div class="empty">
-                    Accès réservé aux administrateurs.
-                </div>
+                <h2>
+                    Accès refusé
+                </h2>
 
             </div>
 
@@ -2443,18 +1948,29 @@ async function roles() {
         data,
         error
     } = await supabase
-        .from("roles")
+        .from("account_requests")
         .select("*")
         .order(
-            "name"
+            "created_at",
+            {
+                ascending: false
+            }
         );
 
 
     if (error) {
 
-        alert(
-            error.message
-        );
+        content.innerHTML = `
+
+            <div class="panel">
+
+                ${esc(
+                    error.message
+                )}
+
+            </div>
+
+        `;
 
         return;
 
@@ -2466,24 +1982,8 @@ async function roles() {
         <div class="page-intro">
 
             <h2>
-                Rôles
+                Demandes de comptes
             </h2>
-
-            <p class="muted">
-                Créez et gérez les rôles de la Mairie.
-            </p>
-
-        </div>
-
-
-        <div class="toolbar">
-
-            <button
-                class="primary-btn"
-                id="createRole"
-            >
-                + Créer un rôle
-            </button>
 
         </div>
 
@@ -2497,15 +1997,19 @@ async function roles() {
                     <tr>
 
                         <th>
-                            Rôle
+                            Demandeur
                         </th>
 
                         <th>
-                            Description
+                            Identifiant
                         </th>
 
                         <th>
-                            Administration
+                            Motif
+                        </th>
+
+                        <th>
+                            Statut
                         </th>
 
                         <th>
@@ -2521,22 +2025,18 @@ async function roles() {
 
                     ${
                         (data || [])
-                            .map(role => `
+                            .map(request => `
 
                                 <tr>
 
                                     <td>
 
                                         ${esc(
-                                            role.icon ||
-                                            ""
+                                            request.first_name
                                         )}
-
-                                        <strong>
-                                            ${esc(
-                                                role.name
-                                            )}
-                                        </strong>
+                                        ${esc(
+                                            request.last_name
+                                        )}
 
                                     </td>
 
@@ -2544,7 +2044,16 @@ async function roles() {
                                     <td>
 
                                         ${esc(
-                                            role.description ||
+                                            request.username
+                                        )}
+
+                                    </td>
+
+
+                                    <td>
+
+                                        ${esc(
+                                            request.reason ||
                                             "—"
                                         )}
 
@@ -2553,30 +2062,32 @@ async function roles() {
 
                                     <td>
 
-                                        ${
-                                            role.is_admin
-                                                ? "👑 Oui"
-                                                : "Non"
-                                        }
+                                        ${esc(
+                                            request.status
+                                        )}
 
                                     </td>
 
 
                                     <td>
 
-                                        <button
-                                            class="secondary-btn"
-                                            data-edit-role="${role.id}"
-                                        >
-                                            Modifier
-                                        </button>
+                                        ${
+                                            request.status ===
+                                            "pending"
 
-                                        <button
-                                            class="danger-btn"
-                                            data-delete-role="${role.id}"
-                                        >
-                                            Supprimer
-                                        </button>
+                                                ? `
+
+                                                    <button
+                                                        class="danger-btn"
+                                                        data-reject="${request.id}"
+                                                    >
+                                                        Refuser
+                                                    </button>
+
+                                                `
+
+                                                : "—"
+                                        }
 
                                     </td>
 
@@ -2596,638 +2107,36 @@ async function roles() {
 
 
     document
-        .querySelector(
-            "#createRole"
-        )
-        .onclick =
-            () =>
-                openRoleForm();
-
-
-    document
         .querySelectorAll(
-            "[data-edit-role]"
+            "[data-reject]"
         )
         .forEach(button => {
 
             button.onclick =
-                () =>
-                    openRoleForm(
-                        button.dataset.editRole
-                    );
-
-        });
-
-
-    document
-        .querySelectorAll(
-            "[data-delete-role]"
-        )
-        .forEach(button => {
-
-            button.onclick =
-                () =>
-                    deleteRole(
-                        button.dataset.deleteRole
-                    );
-
-        });
-
-}
-
-
-// ============================================================
-// FORMULAIRE ROLE
-// ============================================================
-
-async function openRoleForm(
-    roleId = null
-) {
-
-    let role = null;
-
-
-    if (roleId) {
-
-        const result =
-            await supabase
-                .from("roles")
-                .select("*")
-                .eq(
-                    "id",
-                    roleId
-                )
-                .single();
-
-
-        role =
-            result.data;
-
-    }
-
-
-    modalRoot.innerHTML = `
-
-        <div class="modal-backdrop">
-
-            <div class="modal">
-
-                <div class="modal-head">
-
-                    <h2>
-                        ${
-                            role
-                                ? "Modifier le rôle"
-                                : "Créer un rôle"
-                        }
-                    </h2>
-
-                    <button
-                        class="close"
-                        type="button"
-                    >
-                        ×
-                    </button>
-
-                </div>
-
-
-                <form id="roleForm">
-
-                    <label>
-
-                        Nom
-
-                        <input
-                            id="roleName"
-                            value="${esc(
-                                role?.name ||
-                                ""
-                            )}"
-                            required
-                        >
-
-                    </label>
-
-
-                    <label>
-
-                        Description
-
-                        <textarea
-                            id="roleDescription"
-                        >${esc(
-                            role?.description ||
-                            ""
-                        )}</textarea>
-
-                    </label>
-
-
-                    <label>
-
-                        Icône
-
-                        <input
-                            id="roleIcon"
-                            value="${esc(
-                                role?.icon ||
-                                ""
-                            )}"
-                            placeholder="Ex : 🏛️"
-                        >
-
-                    </label>
-
-
-                    <label>
-
-                        <input
-                            id="roleAdmin"
-                            type="checkbox"
-                            ${
-                                role?.is_admin
-                                    ? "checked"
-                                    : ""
-                            }
-                        >
-
-                        Ce rôle est administrateur
-                        👑
-
-                    </label>
-
-
-                    <button
-                        class="primary-btn"
-                        type="submit"
-                    >
-                        Enregistrer
-                    </button>
-
-                </form>
-
-            </div>
-
-        </div>
-
-    `;
-
-
-    modalRoot
-        .querySelector(
-            ".close"
-        )
-        .onclick =
-            () =>
-                modalRoot.innerHTML = "";
-
-
-    modalRoot
-        .querySelector(
-            "#roleForm"
-        )
-        .onsubmit =
-            async event => {
-
-                event.preventDefault();
-
-
-                const payload = {
-
-                    name:
-                        document.querySelector(
-                            "#roleName"
-                        ).value
-                        .trim(),
-
-                    description:
-                        document.querySelector(
-                            "#roleDescription"
-                        ).value
-                        .trim(),
-
-                    icon:
-                        document.querySelector(
-                            "#roleIcon"
-                        ).value
-                        .trim(),
-
-                    is_admin:
-                        document.querySelector(
-                            "#roleAdmin"
-                        ).checked
-
-                };
-
-
-                const result =
-                    roleId
-
-                        ? await supabase
-                            .from("roles")
-                            .update(
-                                payload
-                            )
-                            .eq(
-                                "id",
-                                roleId
-                            )
-
-                        : await supabase
-                            .from("roles")
-                            .insert(
-                                payload
-                            );
-
-
-                if (result.error) {
-
-                    alert(
-                        result.error.message
-                    );
-
-                    return;
-
-                }
-
-
-                modalRoot.innerHTML =
-                    "";
-
-
-                roles();
-
-            };
-
-}
-
-
-// ============================================================
-// SUPPRIMER UN ROLE
-// ============================================================
-
-async function deleteRole(
-    roleId
-) {
-
-    if (
-        !confirm(
-            "Supprimer définitivement ce rôle ?"
-        )
-    ) {
-
-        return;
-
-    }
-
-
-    const {
-        error
-    } = await supabase
-        .from("roles")
-        .delete()
-        .eq(
-            "id",
-            roleId
-        );
-
-
-    if (error) {
-
-        alert(
-            error.message
-        );
-
-        return;
-
-    }
-
-
-    roles();
-
-}
-
-
-// ============================================================
-// PERMISSIONS
-// ============================================================
-
-async function permissions() {
-
-    if (!isAdmin()) {
-
-        content.innerHTML = `
-
-            <div class="panel">
-
-                <div class="empty">
-                    Accès réservé aux administrateurs.
-                </div>
-
-            </div>
-
-        `;
-
-        return;
-
-    }
-
-
-    const {
-        data: rolesList
-    } = await supabase
-        .from("roles")
-        .select("*")
-        .order(
-            "name"
-        );
-
-
-    const {
-        data: permissionsList
-    } = await supabase
-        .from("permissions")
-        .select("*")
-        .order(
-            "name"
-        );
-
-
-    content.innerHTML = `
-
-        <div class="page-intro">
-
-            <h2>
-                Permissions
-            </h2>
-
-            <p class="muted">
-                Attribuez les permissions aux rôles.
-            </p>
-
-        </div>
-
-
-        <div class="panel">
-
-            <label>
-
-                Rôle
-
-                <select id="permissionRole">
-
-                    <option value="">
-                        Sélectionner un rôle
-                    </option>
-
-                    ${
-                        (rolesList || [])
-                            .map(role => `
-
-                                <option
-                                    value="${role.id}"
-                                >
-
-                                    ${
-                                        role.is_admin
-                                            ? "👑 "
-                                            : ""
-                                    }
-
-                                    ${esc(
-                                        role.name
-                                    )}
-
-                                </option>
-
-                            `)
-                            .join("")
-                    }
-
-                </select>
-
-            </label>
-
-
-            <div id="permissionEditor">
-
-                <div class="empty">
-
-                    Sélectionnez un rôle.
-
-                </div>
-
-            </div>
-
-        </div>
-
-    `;
-
-
-    document
-        .querySelector(
-            "#permissionRole"
-        )
-        .onchange =
-            event => {
-
-                if (
-                    !event.target.value
-                ) {
-
-                    return;
-
-                }
-
-
-                renderPermissionEditor(
-
-                    event.target.value,
-
-                    permissionsList || []
-
-                );
-
-            };
-
-}
-
-
-// ============================================================
-// EDITEUR PERMISSIONS
-// ============================================================
-
-async function renderPermissionEditor(
-    roleId,
-    permissionsList
-) {
-
-    const {
-        data: assigned
-    } = await supabase
-        .from("role_permissions")
-        .select(`
-            permission_id,
-            module
-        `)
-        .eq(
-            "role_id",
-            roleId
-        );
-
-
-    const modules = [
-
-        "mariages",
-        "name_changes",
-        "sanctions",
-        "blacklist",
-        "agenda",
-        "documents"
-
-    ];
-
-
-    const editor =
-        document.querySelector(
-            "#permissionEditor"
-        );
-
-
-    editor.innerHTML = `
-
-        <form id="permissionForm">
-
-            ${
-
-                modules
-                    .map(module => `
-
-                        <div class="panel">
-
-                            <h3>
-                                ${esc(
-                                    module
-                                )}
-                            </h3>
-
-
-                            ${
-                                permissionsList
-                                    .map(permission => {
-
-                                        const checked =
-                                            (assigned || [])
-                                                .some(
-                                                    item =>
-                                                        item.permission_id ===
-                                                        permission.id &&
-                                                        item.module ===
-                                                        module
-                                                );
-
-
-                                        return `
-
-                                            <label>
-
-                                                <input
-                                                    type="checkbox"
-                                                    data-permission="${permission.id}"
-                                                    data-module="${module}"
-                                                    ${
-                                                        checked
-                                                            ? "checked"
-                                                            : ""
-                                                    }
-                                                >
-
-                                                ${esc(
-                                                    permission.name
-                                                )}
-
-                                            </label>
-
-                                        `;
-
-                                    })
-                                    .join("")
-                            }
-
-                        </div>
-
-                    `)
-                    .join("")
-
-            }
-
-
-            <button
-                class="primary-btn"
-                type="submit"
-            >
-                Enregistrer les permissions
-            </button>
-
-        </form>
-
-    `;
-
-
-    document
-        .querySelector(
-            "#permissionForm"
-        )
-        .onsubmit =
-            async event => {
-
-                event.preventDefault();
-
-
-                await supabase
-                    .from("role_permissions")
-                    .delete()
-                    .eq(
-                        "role_id",
-                        roleId
-                    );
-
-
-                const selected =
-                    Array.from(
-                        document
-                            .querySelectorAll(
-                                "#permissionForm input[type=checkbox]:checked"
-                            )
-                    );
-
-
-                if (selected.length) {
-
-                    const rows =
-                        selected.map(
-                            input => ({
-
-                                role_id:
-                                    roleId,
-
-                                permission_id:
-                                    input.dataset.permission,
-
-                                module:
-                                    input.dataset.module
-
-                            })
-                        );
-
+                async () => {
 
                     const {
                         error
                     } = await supabase
-                        .from("role_permissions")
-                        .insert(
-                            rows
+                        .from(
+                            "account_requests"
+                        )
+                        .update({
+
+                            status:
+                                "rejected",
+
+                            reviewed_by:
+                                user.id,
+
+                            reviewed_at:
+                                new Date()
+                                    .toISOString()
+
+                        })
+                        .eq(
+                            "id",
+                            button.dataset.reject
                         );
 
 
@@ -3241,32 +2150,124 @@ async function renderPermissionEditor(
 
                     }
 
-                }
 
+                    requestsPage();
 
-                alert(
-                    "Permissions enregistrées."
-                );
+                };
 
-            };
+        });
 
 }
 
 
-// ============================================================
-// DEMARRAGE
-// ============================================================
+/* ============================================================
+   PERMISSIONS
+============================================================ */
 
-async function startApp() {
+async function permissionsPage() {
 
-    await loadCurrentUser();
+    if (!isAdmin) {
 
-    await load(
-        "dashboard"
-    );
+        content.innerHTML = `
+
+            <div class="panel">
+
+                <h2>
+                    Accès refusé
+                </h2>
+
+            </div>
+
+        `;
+
+        return;
+
+    }
+
+
+    const {
+        data,
+        error
+    } = await supabase
+        .from("permissions")
+        .select("*")
+        .order(
+            "name"
+        );
+
+
+    if (error) {
+
+        content.innerHTML = `
+
+            <div class="panel">
+
+                ${esc(
+                    error.message
+                )}
+
+            </div>
+
+        `;
+
+        return;
+
+    }
+
+
+    content.innerHTML = `
+
+        <div class="page-intro">
+
+            <h2>
+                Permissions
+            </h2>
+
+            <p class="muted">
+                Permissions disponibles dans le système.
+            </p>
+
+        </div>
+
+
+        <div class="panel">
+
+            ${
+                (data || [])
+                    .map(permission => `
+
+                        <div class="event">
+
+                            <b>
+                                ${esc(
+                                    permission.name
+                                )}
+                            </b>
+
+                            <small>
+                                ${esc(
+                                    permission.description ||
+                                    ""
+                                )}
+                            </small>
+
+                        </div>
+
+                    `)
+                    .join("")
+            }
+
+        </div>
+
+    `;
 
 }
 
 
-startApp();
-```
+/* ============================================================
+   INITIALISATION
+============================================================ */
+
+loadPage(
+    "dashboard"
+);
